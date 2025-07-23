@@ -1,27 +1,57 @@
-import { Routes, Route, Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from './services/firebase';
+
 import Dashboard from './pages/Dashboard';
 import Captura from './pages/Captura';
 import Tarjetas from './pages/Tarjetas';
+import Login from './components/Login';
+import Sidebar from './components/Sidebar'; // ✅ usamos Sidebar con logout
 
 function App() {
+  const [usuario, setUsuario] = useState(null);
+  const [cargando, setCargando] = useState(true);
+  const location = useLocation();
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, user => {
+      setUsuario(user);
+      setCargando(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  if (cargando) return <p className="text-center mt-5">Cargando...</p>;
+
+  const estaLogueado = Boolean(usuario);
+  const esLogin = location.pathname === '/login';
+
+  if (!estaLogueado && !esLogin) {
+    return <Navigate to="/login" replace />;
+  }
+
+  // Si está en /login, solo renderizamos el login
+  if (esLogin) {
+    return (
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="*" element={<Navigate to="/" />} />
+      </Routes>
+    );
+  }
+
+  // Si está logueado, mostramos la app con Sidebar
   return (
     <div className="d-flex min-vh-100">
-      {/* SIDEBAR */}
-      <aside className="bg-dark text-white p-3" style={{ width: '220px' }}>
-        <h5 className="mb-4">💰 Finanzas</h5>
-        <nav className="nav flex-column gap-2">
-          <Link to="/" className="nav-link text-white">📊 Dashboard</Link>
-          <Link to="/captura" className="nav-link text-white">✍️ Captura</Link>
-          <Link to="/tarjetas" className="nav-link text-white">💳 Tarjetas</Link>
-        </nav>
-      </aside>
+      <Sidebar /> {/* ✅ Sidebar ya contiene enlaces y botón de logout */}
 
-      {/* CONTENIDO */}
       <main className="flex-fill bg-light p-4">
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/captura" element={<Captura />} />
           <Route path="/tarjetas" element={<Tarjetas />} />
+          <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </main>
     </div>
