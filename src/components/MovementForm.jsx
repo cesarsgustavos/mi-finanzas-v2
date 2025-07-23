@@ -9,7 +9,7 @@ const categoriasCatalogo = [
   { nombre: 'Otros', icono: <FaWallet /> },
 ];
 
-function MovementForm({ onAdd, movimientoEditar }) {
+function MovementForm({ onAdd, movimientoEditar, fechaInicio, setFechaInicio }) {
   const [form, setForm] = useState({
     tipo: 'gasto',
     monto: '',
@@ -22,27 +22,45 @@ function MovementForm({ onAdd, movimientoEditar }) {
     categoria: ''
   });
 
+  // Al cargar para edición, sincronizamos form y fechaInicio
   useEffect(() => {
     if (movimientoEditar) {
-      setForm(movimientoEditar);
+      setForm({
+        tipo: movimientoEditar.tipo,
+        monto: movimientoEditar.monto.toString(),
+        descripcion: movimientoEditar.descripcion,
+        frecuenciaTipo: movimientoEditar.frecuenciaTipo,
+        frecuencia: movimientoEditar.frecuencia || '',
+        diaMes: movimientoEditar.diaMes || '',
+        diaSemana: movimientoEditar.diaSemana || '',
+        fecha: movimientoEditar.fecha || '',
+        categoria: movimientoEditar.categoria
+      });
+      if (movimientoEditar.frecuenciaTipo === 'recurrente') {
+        setFechaInicio(movimientoEditar.fechaInicio || '');
+      } else {
+        setFechaInicio('');
+      }
     }
-  }, [movimientoEditar]);
+  }, [movimientoEditar, setFechaInicio]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setForm({ ...form, [name]: value });
+    setForm(prev => ({ ...prev, [name]: value }));
   };
 
   const handleCategoriaSelect = (categoria) => {
-    setForm({ ...form, categoria });
+    setForm(prev => ({ ...prev, categoria }));
   };
 
   const isFormValid = () => {
     if (!form.monto || !form.descripcion || !form.categoria) return false;
     if (form.frecuenciaTipo === 'único' && !form.fecha) return false;
-    if (form.frecuenciaTipo === 'recurrente' && !form.frecuencia) return false;
-    if (form.frecuencia === 'mensual' && !form.diaMes) return false;
-    if (form.frecuencia === 'semanal' && !form.diaSemana) return false;
+    if (form.frecuenciaTipo === 'recurrente') {
+      if (!form.frecuencia || !fechaInicio) return false;
+      if (form.frecuencia === 'mensual' && !form.diaMes) return false;
+      if (form.frecuencia === 'semanal' && !form.diaSemana) return false;
+    }
     return true;
   };
 
@@ -52,11 +70,14 @@ function MovementForm({ onAdd, movimientoEditar }) {
 
     const movimiento = {
       ...form,
-      monto: parseFloat(form.monto)
+      monto: parseFloat(form.monto),
+      // sólo añadimos fechaInicio si es recurrente
+      ...(form.frecuenciaTipo === 'recurrente' && { fechaInicio })
     };
 
     onAdd(movimiento);
 
+    // Reset form y fechaInicio externa
     setForm({
       tipo: 'gasto',
       monto: '',
@@ -68,6 +89,7 @@ function MovementForm({ onAdd, movimientoEditar }) {
       fecha: '',
       categoria: ''
     });
+    setFechaInicio('');
   };
 
   const mostrarFrecuencia = form.frecuenciaTipo === 'recurrente';
@@ -92,16 +114,28 @@ function MovementForm({ onAdd, movimientoEditar }) {
         </div>
 
         {mostrarFrecuencia && (
-          <div className="col-md-6">
-            <label className="form-label">Frecuencia</label>
-            <select className="form-select" name="frecuencia" value={form.frecuencia} onChange={handleChange}>
-              <option value="">Seleccionar</option>
-              <option value="diario">Diario</option>
-              <option value="semanal">Semanal</option>
-              <option value="catorcenal">Catorcenal</option>
-              <option value="mensual">Mensual</option>
-            </select>
-          </div>
+          <>
+            <div className="col-md-6">
+              <label className="form-label">Frecuencia</label>
+              <select className="form-select" name="frecuencia" value={form.frecuencia} onChange={handleChange}>
+                <option value="">Seleccionar</option>
+                <option value="diario">Diario</option>
+                <option value="semanal">Semanal</option>
+                <option value="catorcenal">Catorcenal</option>
+                <option value="mensual">Mensual</option>
+              </select>
+            </div>
+
+            <div className="col-md-6">
+              <label className="form-label">Fecha de inicio</label>
+              <input
+                type="date"
+                className="form-control"
+                value={fechaInicio}
+                onChange={e => setFechaInicio(e.target.value)}
+              />
+            </div>
+          </>
         )}
 
         {form.frecuencia === 'mensual' && (
