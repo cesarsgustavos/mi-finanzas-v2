@@ -432,18 +432,16 @@ export default function DashboardCatorcenal() {
   return (
     <>
       {/* Export button and year selector */}
-      <div className="d-flex justify-content-between align-items-center mb-3">
-        <button className="btn btn-outline-primary" onClick={exportarExcel}>
-          📥 Exportar a Excel
-        </button>
-        <div>
-          <label className="me-2">Selecciona año:</label>
-          <select value={anioSeleccionado} onChange={(e) => setAnioSeleccionado(Number(e.target.value))} className="form-select d-inline-block w-auto">
-            <option value={2025}>2025</option>
-            <option value={2026}>2026</option>
-            <option value={2027}>2027</option>
-          </select>
-        </div>
+      <div className="d-flex justify-content-between align-items-center mb-4">
+    <button className="btn btn-outline-primary">📥 Exportar a Excel</button>
+    <div className="d-flex align-items-center">
+      <label className="me-2 mb-0">Año:</label>
+      <select className="form-select w-auto">
+        <option>2025</option>
+        <option>2026</option>
+        <option>2027</option>
+      </select>
+    </div>
       </div>
 
       {/* Render catorcenas list */}

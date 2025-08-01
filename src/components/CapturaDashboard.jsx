@@ -4,6 +4,15 @@ import { FaUtensils, FaHome, FaBus, FaHeartbeat, FaWallet, FaEdit, FaTrash } fro
 import { getDocs, collection, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 
+/**
+ * Dashboard para la captura y visualización de movimientos (ingresos y gastos).
+ *
+ * Este componente presenta un formulario de registro/edición de movimientos,
+ * filtros básicos por fecha y tipo de recurrencia, y un resumen visual de
+ * gastos e ingresos. La presentación se ha mejorado utilizando tarjetas
+ * coloreadas para cada categoría (gastos e ingresos), mostrando los totales
+ * correspondientes y listando los movimientos en una lista estilizada.
+ */
 const iconosCategorias = {
   Alimentos: <FaUtensils />, 
   Vivienda: <FaHome />, 
@@ -12,7 +21,7 @@ const iconosCategorias = {
   Otros: <FaWallet />
 };
 
-function Dashboard() {
+function CapturaDashboard() {
   const [movimientos, setMovimientos] = useState([]);
   const [modoEdicion, setModoEdicion] = useState(false);
   const [indiceEdicion, setIndiceEdicion] = useState(null);
@@ -21,6 +30,7 @@ function Dashboard() {
   const [filtroFechaFin, setFiltroFechaFin] = useState('');
   const [filtroTipoRecurrencia, setFiltroTipoRecurrencia] = useState('todos');
 
+  // Cargar movimientos desde Firebase al montar el componente
   useEffect(() => {
     async function cargarMovimientos() {
       try {
@@ -34,7 +44,10 @@ function Dashboard() {
     cargarMovimientos();
   }, []);
 
-  const agregarMovimiento = async (nuevo) => {
+  /**
+   * Agrega un nuevo movimiento o actualiza uno existente.
+   */
+  const agregarMovimiento = async nuevo => {
     const movConFecha = {
       ...nuevo,
       ...(nuevo.frecuenciaTipo === 'recurrente' && { fechaInicio })
@@ -61,7 +74,10 @@ function Dashboard() {
     }
   };
 
-  const eliminarMovimiento = async (id) => {
+  /**
+   * Elimina un movimiento de la lista y de Firebase.
+   */
+  const eliminarMovimiento = async id => {
     if (!window.confirm('¿Eliminar este movimiento?')) return;
     setMovimientos(movimientos.filter(m => m.id !== id));
     try {
@@ -71,7 +87,10 @@ function Dashboard() {
     }
   };
 
-  const editarMovimiento = (id) => {
+  /**
+   * Prepara un movimiento para su edición.
+   */
+  const editarMovimiento = id => {
     const idx = movimientos.findIndex(m => m.id === id);
     if (idx !== -1) {
       const mov = movimientos[idx];
@@ -83,7 +102,10 @@ function Dashboard() {
     }
   };
 
-  const renderDetallesFrecuencia = (mov) => {
+  /**
+   * Construye una cadena de detalles para mostrar la recurrencia del movimiento.
+   */
+  const renderDetallesFrecuencia = mov => {
     if (mov.frecuenciaTipo === 'único') return `📅 ${mov.fecha}`;
     let detalle = '';
     switch (mov.frecuencia) {
@@ -100,7 +122,11 @@ function Dashboard() {
 
   const movimientoEnEdicion = modoEdicion ? movimientos[indiceEdicion] : null;
 
-  const filtrarMovimientos = (lista) => {
+  /**
+   * Aplica filtros a una lista de movimientos en función del tipo, fecha
+   * de inicio y fecha de fin.
+   */
+  const filtrarMovimientos = lista => {
     return lista.filter(m => {
       if (filtroTipoRecurrencia !== 'todos' && m.frecuenciaTipo !== filtroTipoRecurrencia) return false;
       const fechaValor = m.frecuenciaTipo === 'único' ? m.fecha : m.fechaInicio;
@@ -110,8 +136,13 @@ function Dashboard() {
     });
   };
 
+  // Listas filtradas de gastos e ingresos
   const gastos = filtrarMovimientos(movimientos.filter(m => m.tipo === 'gasto'));
   const ingresos = filtrarMovimientos(movimientos.filter(m => m.tipo === 'ingreso'));
+
+  // Totales para cada categoría
+  const totalGastos = gastos.reduce((sum, m) => sum + m.monto, 0);
+  const totalIngresos = ingresos.reduce((sum, m) => sum + m.monto, 0);
 
   return (
     <div className="p-4">
@@ -125,8 +156,9 @@ function Dashboard() {
         />
       </div>
 
+      {/* Filtros */}
       <div className="mb-4 border p-3 rounded bg-light">
-        <h6>🔍 Filtros</h6>
+        <h6>Filtros</h6>
         <div className="row g-2">
           <div className="col-md-4">
             <label className="form-label">Fecha inicio</label>
@@ -161,55 +193,71 @@ function Dashboard() {
         </div>
       </div>
 
-      {/* Gastos */}
-      <div className="mb-5">
-        <h6 className="text-danger">🟥 Gastos</h6>
-        {gastos.length === 0 ? (
-          <p className="text-muted">No hay gastos que coincidan con los filtros.</p>
-        ) : (
-          <ul className="list-group">
-            {gastos.map((m, idx) => (
-              <li key={idx} className="list-group-item d-flex justify-content-between align-items-start">
-                <div>
-                  <strong>{iconosCategorias[m.categoria]} {m.descripcion}</strong><br />
-                  <small>{renderDetallesFrecuencia(m)}<br />Categoría: {m.categoria}</small>
-                </div>
-                <div className="d-flex align-items-center gap-2">
-                  <span className="badge bg-danger">${m.monto.toFixed(2)}</span>
-                  <button className="btn btn-sm btn-outline-secondary" title="Editar" onClick={() => editarMovimiento(m.id)}><FaEdit /></button>
-                  <button className="btn btn-sm btn-outline-danger" title="Eliminar" onClick={() => eliminarMovimiento(m.id)}><FaTrash /></button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
-      {/* Ingresos */}
-      <div>
-        <h6 className="text-success">🟩 Ingresos</h6>
-        {ingresos.length === 0 ? (
-          <p className="text-muted">No hay ingresos que coincidan con los filtros.</p>
-        ) : (
-          <ul className="list-group">
-            {ingresos.map((m, idx) => (
-              <li key={idx} className="list-group-item d-flex justify-content-between align-items-start">
-                <div>
-                  <strong>{iconosCategorias[m.categoria]} {m.descripcion}</strong><br />
-                  <small>{renderDetallesFrecuencia(m)}<br />Categoría: {m.categoria}</small>
-                </div>
-                <div className="d-flex align-items-center gap-2">
-                  <span className="badge bg-success">${m.monto.toFixed(2)}</span>
-                  <button className="btn btn-sm btn-outline-secondary" title="Editar" onClick={() => editarMovimiento(m.id)}><FaEdit /></button>
-                  <button className="btn btn-sm btn-outline-danger" title="Eliminar" onClick={() => eliminarMovimiento(m.id)}><FaTrash /></button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+      {/* Resumen de gastos e ingresos */}
+      <div className="row g-4">
+        {/* Gastos */}
+        <div className="col-md-6">
+          <div className="card border-danger h-100">
+            <div className="card-header bg-danger text-white d-flex justify-content-between align-items-center">
+              <span>🟥 Gastos</span>
+              <span>Total: ${totalGastos.toFixed(2)}</span>
+            </div>
+            <div className="card-body p-0">
+              {gastos.length === 0 ? (
+                <p className="text-muted p-3 mb-0">No hay gastos que coincidan con los filtros.</p>
+              ) : (
+                <ul className="list-group list-group-flush">
+                  {gastos.map((m, idx) => (
+                    <li key={idx} className="list-group-item d-flex justify-content-between align-items-start">
+                      <div>
+                        <strong>{iconosCategorias[m.categoria]} {m.descripcion}</strong><br />
+                        <small>{renderDetallesFrecuencia(m)}<br />Categoría: {m.categoria}</small>
+                      </div>
+                      <div className="d-flex align-items-center gap-2">
+                        <span className="badge bg-danger">${m.monto.toFixed(2)}</span>
+                        <button className="btn btn-sm btn-outline-secondary" title="Editar" onClick={() => editarMovimiento(m.id)}><FaEdit /></button>
+                        <button className="btn btn-sm btn-outline-danger" title="Eliminar" onClick={() => eliminarMovimiento(m.id)}><FaTrash /></button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+        {/* Ingresos */}
+        <div className="col-md-6">
+          <div className="card border-success h-100">
+            <div className="card-header bg-success text-white d-flex justify-content-between align-items-center">
+              <span>🟩 Ingresos</span>
+              <span>Total: ${totalIngresos.toFixed(2)}</span>
+            </div>
+            <div className="card-body p-0">
+              {ingresos.length === 0 ? (
+                <p className="text-muted p-3 mb-0">No hay ingresos que coincidan con los filtros.</p>
+              ) : (
+                <ul className="list-group list-group-flush">
+                  {ingresos.map((m, idx) => (
+                    <li key={idx} className="list-group-item d-flex justify-content-between align-items-start">
+                      <div>
+                        <strong>{iconosCategorias[m.categoria]} {m.descripcion}</strong><br />
+                        <small>{renderDetallesFrecuencia(m)}<br />Categoría: {m.categoria}</small>
+                      </div>
+                      <div className="d-flex align-items-center gap-2">
+                        <span className="badge bg-success">${m.monto.toFixed(2)}</span>
+                        <button className="btn btn-sm btn-outline-secondary" title="Editar" onClick={() => editarMovimiento(m.id)}><FaEdit /></button>
+                        <button className="btn btn-sm btn-outline-danger" title="Eliminar" onClick={() => eliminarMovimiento(m.id)}><FaTrash /></button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-export default Dashboard;
+export default CapturaDashboard;
