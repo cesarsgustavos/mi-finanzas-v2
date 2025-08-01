@@ -47,6 +47,174 @@ function obtenerPagoTarjeta(g) {
 }
 
 /**
+ * Calculate the due date for a given purchase based on the credit card's
+ * cut‑off day and the grace period (diasCredito).  A purchase made on a
+ * particular day is billed in the statement whose cut date is on or after
+ * the purchase date.  The payment due date is then the cut date plus
+ * diasCredito days.
+ *
+ * @param {Date} fechaCompra The date of the purchase (occurrence)
+ * @param {Object} tarjeta The credit card object with diaCorte and diasCredito
+ * @returns {Date} The calculated due date
+ */
+function calcularFechaVencimiento(fechaCompra, tarjeta) {
+  const corte = new Date(fechaCompra);
+  corte.setDate(tarjeta.diaCorte);
+  // If the purchase was after the cut date for the month, shift to the next month
+  if (fechaCompra.getDate() > tarjeta.diaCorte) {
+    corte.setMonth(corte.getMonth() + 1);
+  }
+  // Add the grace period to get the due date
+  return addDays(corte, tarjeta.diasCredito);
+}
+
+/**
+ * Generate all payment due dates for a card expense that fall inside a
+ * particular catorcena.  This helper handles MSI plans as well as
+ * recurrent card expenses (diario, semanal, catorcenal, mensual).  Each
+ * occurrence is treated as a new purchase; its due date is computed using
+ * the credit card's cut date and grace period.  Only due dates that fall
+ * within the provided catorcena (inclusive) are returned.
+ *
+ * @param {Object} g The expense object from the tarjeta.gastos array
+ * @param {Object} tarjeta The credit card object with diaCorte and diasCredito
+ * @param {Date} inicioCatorcena Start of the catorcena
+ * @param {Date} finCatorcena End of the catorcena
+ * @returns {Date[]} Array of due dates inside the catorcena
+ */
+function obtenerFechasPagoEnCatorcena(g, tarjeta, inicioCatorcena, finCatorcena) {
+  const fechas = [];
+  // Determine the starting date of the expense
+  const fechaBase = g.fecha ? parseISO(g.fecha) : (g.fechaInicio ? parseISO(g.fechaInicio) : null);
+  if (!fechaBase) return fechas;
+
+  // Handle months without interest (MSI) by splitting the total across the
+  // number of months.  Each month is treated as a separate purchase occurring
+  // on the same day of the month as the original.  The due date for each
+  // purchase is computed and only those falling within the catorcena are kept.
+  if (g.esMSI && g.mesesMSI) {
+    const totalMeses = Number(g.mesesMSI);
+    for (let j = 0; j < totalMeses; j++) {
+      const compra = new Date(fechaBase);
+      compra.setMonth(compra.getMonth() + j);
+      const vencimiento = calcularFechaVencimiento(compra, tarjeta);
+      if ((isAfter(vencimiento, inicioCatorcena) || isEqual(vencimiento, inicioCatorcena)) &&
+          (isBefore(vencimiento, finCatorcena) || isEqual(vencimiento, finCatorcena))) {
+        fechas.push(vencimiento);
+      }
+    }
+    return fechas;
+  }
+
+  // For recurrent expenses we generate occurrences according to their frequency
+  if (g.frecuenciaTipo === 'recurrente') {
+    switch (g.frecuencia) {
+      case 'diario': {
+        // Purchases every day starting from fechaBase
+        // We iterate until the purchase date exceeds the end of the catorcena
+        for (let d = new Date(fechaBase); d <= finCatorcena; d.setDate(d.getDate() + 1)) {
+          const vencimiento = calcularFechaVencimiento(d, tarjeta);
+          if ((isAfter(vencimiento, inicioCatorcena) || isEqual(vencimiento, inicioCatorcena)) &&
+              (isBefore(vencimiento, finCatorcena) || isEqual(vencimiento, finCatorcena))) {
+            fechas.push(new Date(vencimiento));
+          }
+        }
+        break;
+      }
+      case 'semanal': {
+        // Purchases every week on a specific day of the week
+        const diasMap = { domingo: 0, lunes: 1, martes: 2, miércoles: 3, jueves: 4, viernes: 5, sábado: 6 };
+        const targetDay = diasMap[(g.diaSemana || '').toLowerCase()];
+        if (targetDay === undefined) {
+          // Without a valid day of week we treat it as a one‑off purchase
+          const vencimiento = calcularFechaVencimiento(fechaBase, tarjeta);
+          if ((isAfter(vencimiento, inicioCatorcena) || isEqual(vencimiento, inicioCatorcena)) &&
+              (isBefore(vencimiento, finCatorcena) || isEqual(vencimiento, finCatorcena))) {
+            fechas.push(vencimiento);
+          }
+        } else {
+          // Find the first occurrence of the target weekday on or after the
+          // expense start date
+          let current = new Date(fechaBase);
+          // Move to the first matching day of week
+          while (current.getDay() !== targetDay) {
+            current.setDate(current.getDate() + 1);
+          }
+          // Iterate weekly and compute due dates
+          for (let d = new Date(current); d <= finCatorcena; d.setDate(d.getDate() + 7)) {
+            const vencimiento = calcularFechaVencimiento(d, tarjeta);
+            if ((isAfter(vencimiento, inicioCatorcena) || isEqual(vencimiento, inicioCatorcena)) &&
+                (isBefore(vencimiento, finCatorcena) || isEqual(vencimiento, finCatorcena))) {
+              fechas.push(new Date(vencimiento));
+            }
+          }
+        }
+        break;
+      }
+      case 'catorcenal': {
+        // Purchases every 14 days starting from fechaBase
+        // We need to align to the period; skip forward in 14‑day increments
+        let d = new Date(fechaBase);
+        // Advance to the first purchase date such that its due date might fall within the catorcena
+        while (d <= finCatorcena) {
+          const vencimiento = calcularFechaVencimiento(d, tarjeta);
+          if ((isAfter(vencimiento, inicioCatorcena) || isEqual(vencimiento, inicioCatorcena)) &&
+              (isBefore(vencimiento, finCatorcena) || isEqual(vencimiento, finCatorcena))) {
+            fechas.push(new Date(vencimiento));
+          }
+          // Move to the next purchase in 14 days
+          d.setDate(d.getDate() + 14);
+        }
+        break;
+      }
+      case 'mensual': {
+        // Purchases occur on a specific day of the month (diaMes).  If diaMes
+        // isn't provided we use the day of the start date.
+        const dia = g.diaMes ? parseInt(g.diaMes, 10) : fechaBase.getDate();
+        // Start from the month of the expense start date
+        let occ = new Date(fechaBase.getFullYear(), fechaBase.getMonth(), dia);
+        // Ensure the first occurrence is not before the start date
+        if (occ < fechaBase) {
+          occ.setMonth(occ.getMonth() + 1);
+        }
+        // Advance occurrences until the purchase date surpasses the end of the catorcena
+        while (occ <= finCatorcena) {
+          const vencimiento = calcularFechaVencimiento(occ, tarjeta);
+          if ((isAfter(vencimiento, inicioCatorcena) || isEqual(vencimiento, inicioCatorcena)) &&
+              (isBefore(vencimiento, finCatorcena) || isEqual(vencimiento, finCatorcena))) {
+            // Only include if the original occurrence is not before the expense start
+            if (occ >= fechaBase) {
+              fechas.push(new Date(vencimiento));
+            }
+          }
+          // Move to next month
+          occ.setMonth(occ.getMonth() + 1);
+        }
+        break;
+      }
+      default: {
+        // If the frequency is unknown treat it as a single purchase
+        const vencimiento = calcularFechaVencimiento(fechaBase, tarjeta);
+        if ((isAfter(vencimiento, inicioCatorcena) || isEqual(vencimiento, inicioCatorcena)) &&
+            (isBefore(vencimiento, finCatorcena) || isEqual(vencimiento, finCatorcena))) {
+          fechas.push(vencimiento);
+        }
+        break;
+      }
+    }
+    return fechas;
+  }
+
+  // Non‑recurrent (único) expense: just one payment
+  const vencimiento = calcularFechaVencimiento(fechaBase, tarjeta);
+  if ((isAfter(vencimiento, inicioCatorcena) || isEqual(vencimiento, inicioCatorcena)) &&
+      (isBefore(vencimiento, finCatorcena) || isEqual(vencimiento, finCatorcena))) {
+    fechas.push(vencimiento);
+  }
+  return fechas;
+}
+
+/**
  * DashboardCatorcenal component
  *
  * This component renders a list of 26 catorcenas (14‑day periods) for the
@@ -173,45 +341,13 @@ export default function DashboardCatorcenal() {
    * divided equally across the number of months specified.
    */
   const calcularTotalTarjeta = (t, inicio, fin) => {
-    const gastos = (t.gastos || []).filter(g => {
-      const base = g.fecha ? parseISO(g.fecha) : (g.fechaInicio ? parseISO(g.fechaInicio) : null);
-      if (!base) return false;
-
-      const corte = t.diaCorte;
-      const diasCredito = t.diasCredito;
-      const posibleCorte = new Date(base);
-      posibleCorte.setDate(corte);
-      if (base.getDate() > corte) {
-        posibleCorte.setMonth(posibleCorte.getMonth() + 1);
-      }
-
-      const fechasPago = [];
-
-      // MSI: generate payment dates for each month in the plan
-      if (g.esMSI && g.mesesMSI) {
-        for (let j = 0; j < Number(g.mesesMSI); j++) {
-          const cuota = new Date(posibleCorte);
-          cuota.setMonth(cuota.getMonth() + j);
-          fechasPago.push(addDays(cuota, diasCredito));
-        }
-      } else if (g.frecuencia === 'mensual' && g.diaMes) {
-        const dia = parseInt(g.diaMes, 10);
-        const ocurrencia = new Date(inicio.getFullYear(), inicio.getMonth(), dia);
-        if (ocurrencia >= base && ocurrencia >= inicio && ocurrencia <= fin) {
-          fechasPago.push(addDays(ocurrencia, diasCredito));
-        }
-      } else {
-        // Para único y otras recurrencias, la primera fecha de pago
-        fechasPago.push(addDays(posibleCorte, diasCredito));
-      }
-
-      return fechasPago.some(fp =>
-        (isAfter(fp, inicio) || isEqual(fp, inicio)) &&
-        (isBefore(fp, fin) || isEqual(fp, fin))
-      );
-    });
-
-    return gastos.reduce((s, g) => s + obtenerPagoTarjeta(g), 0);
+    // Para cada gasto de la tarjeta calculamos cuántos pagos se generan
+    // dentro de la catorcena y multiplicamos por el monto por pago.  Esto
+    // soporta pagos recurrentes (diario, semanal, catorcenal, mensual) y MSI.
+    return (t.gastos || []).reduce((sum, g) => {
+      const pagos = obtenerFechasPagoEnCatorcena(g, t, inicio, fin);
+      return sum + pagos.length * obtenerPagoTarjeta(g);
+    }, 0);
   };
 
   /**
@@ -313,39 +449,12 @@ export default function DashboardCatorcenal() {
           .filter(m => m.tipo === 'gasto' && enCatorcena(m, c.inicio, c.fin))
           .sort((a, b) => new Date(a.fecha || a.fechaInicio) - new Date(b.fecha || b.fechaInicio));
         const tarjetasTotal = tarjetas.reduce((sum, t) => {
-          // Filtrar gastos de tarjeta que caen en esta catorcena
-          const gt = (t.gastos || []).filter(g => {
-            const base = g.fecha ? parseISO(g.fecha) : (g.fechaInicio ? parseISO(g.fechaInicio) : null);
-            if (!base) return false;
-            const corte = t.diaCorte;
-            const diasCredito = t.diasCredito;
-            const posibleCorte = new Date(base);
-            posibleCorte.setDate(corte);
-            if (base.getDate() > corte) {
-              posibleCorte.setMonth(posibleCorte.getMonth() + 1);
-            }
-            const fechasPago = [];
-            if (g.esMSI && g.mesesMSI) {
-              for (let j = 0; j < Number(g.mesesMSI); j++) {
-                const cuota = new Date(posibleCorte);
-                cuota.setMonth(cuota.getMonth() + j);
-                fechasPago.push(addDays(cuota, diasCredito));
-              }
-            } else if (g.frecuencia === 'mensual' && g.diaMes) {
-              const dia = parseInt(g.diaMes, 10);
-              const ocurrencia = new Date(c.inicio.getFullYear(), c.inicio.getMonth(), dia);
-              if (ocurrencia >= base && ocurrencia >= c.inicio && ocurrencia <= c.fin) {
-                fechasPago.push(addDays(ocurrencia, diasCredito));
-              }
-            } else {
-              fechasPago.push(addDays(posibleCorte, diasCredito));
-            }
-            return fechasPago.some(fp =>
-              (isAfter(fp, c.inicio) || isEqual(fp, c.inicio)) &&
-              (isBefore(fp, c.fin) || isEqual(fp, c.fin))
-            );
+          let subtotal = 0;
+          (t.gastos || []).forEach(g => {
+            const pagos = obtenerFechasPagoEnCatorcena(g, t, c.inicio, c.fin);
+            subtotal += pagos.length * obtenerPagoTarjeta(g);
           });
-          return sum + gt.reduce((s, g) => s + obtenerPagoTarjeta(g), 0);
+          return sum + subtotal;
         }, 0);
         const ingresosTotal = ingresos.reduce((sum, m) => sum + calcularImporte(m), 0);
         const gastosTotal = gastos.reduce((sum, m) => sum + calcularImporte(m), 0);
@@ -405,47 +514,24 @@ export default function DashboardCatorcenal() {
                   <div className="text-muted">Sin cargos en tarjetas</div>
                 )}
                 {tarjetas.map((t) => {
-                  const gastosTarjeta = (t.gastos || []).filter((g) => {
-                    const base = g.fecha ? parseISO(g.fecha) : (g.fechaInicio ? parseISO(g.fechaInicio) : null);
-                    if (!base) return false;
-                    const corte = t.diaCorte;
-                    const diasCredito = t.diasCredito;
-                    const posibleCorte = new Date(base);
-                    posibleCorte.setDate(corte);
-                    if (base.getDate() > corte) {
-                      posibleCorte.setMonth(posibleCorte.getMonth() + 1);
-                    }
-                    const fechasPago = [];
-                    if (g.esMSI && g.mesesMSI) {
-                      for (let j = 0; j < Number(g.mesesMSI); j++) {
-                        const cuota = new Date(posibleCorte);
-                        cuota.setMonth(cuota.getMonth() + j);
-                        fechasPago.push(addDays(cuota, diasCredito));
-                      }
-                    } else if (g.frecuencia === 'mensual' && g.diaMes) {
-                      const dia = parseInt(g.diaMes, 10);
-                      const ocurrencia = new Date(c.inicio.getFullYear(), c.inicio.getMonth(), dia);
-                      if (ocurrencia >= base && ocurrencia >= c.inicio && ocurrencia <= c.fin) {
-                        fechasPago.push(addDays(ocurrencia, diasCredito));
-                      }
-                    } else {
-                      fechasPago.push(addDays(posibleCorte, diasCredito));
-                    }
-                    return fechasPago.some(
-                      (fp) =>
-                        (isAfter(fp, c.inicio) || isEqual(fp, c.inicio)) &&
-                        (isBefore(fp, c.fin) || isEqual(fp, c.fin))
-                    );
+                  // Generamos una lista plana de pagos de tarjeta en esta catorcena.
+                  const gastosTarjeta = [];
+                  (t.gastos || []).forEach((g, gIdx) => {
+                    const pagos = obtenerFechasPagoEnCatorcena(g, t, c.inicio, c.fin);
+                    pagos.forEach((_, pagoIdx) => {
+                      gastosTarjeta.push({ gasto: g, gIdx, pagoIdx });
+                    });
                   });
                   if (gastosTarjeta.length === 0) return null;
-                  const totalGastosTarjeta = gastosTarjeta.reduce((s, g) => s + obtenerPagoTarjeta(g), 0);
+                  const totalGastosTarjeta = gastosTarjeta.reduce((s, item) => s + obtenerPagoTarjeta(item.gasto), 0);
                   return (
                     <div key={t.id} className="mb-2 p-2 border rounded">
                       <div className="fw-semibold">
                         {t.nombre + ' — Total: $' + totalGastosTarjeta.toFixed(2)}
                       </div>
-                      {gastosTarjeta.map((g, idx) => {
-                        const uniqueId = `${t.id}-${idx}`;
+                      {gastosTarjeta.map((item) => {
+                        const uniqueId = `${t.id}-${item.gIdx}-${item.pagoIdx}`;
+                        const g = item.gasto;
                         return (
                           <div key={uniqueId} className="d-flex align-items-center mb-1">
                             <input
@@ -458,6 +544,7 @@ export default function DashboardCatorcenal() {
                             <span style={{ textDecoration: pagados[i]?.includes(uniqueId) ? 'line-through' : 'none', color: pagados[i]?.includes(uniqueId) ? 'green' : 'inherit' }}>
                               {g.descripcion}
                             </span>
+                            {/* Mostrar etiqueta de recurrente para gastos de tarjeta que no son únicos */}
                             {g.frecuenciaTipo === 'recurrente' && <span className="badge bg-info ms-2">Recurrente</span>}
                             {g.esMSI && g.mesesMSI && <span className="badge bg-warning text-dark ms-2">{g.mesesMSI} MSI</span>}
                           </div>
