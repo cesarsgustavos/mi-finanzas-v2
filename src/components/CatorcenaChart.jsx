@@ -1,33 +1,51 @@
 import React from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { format, parse } from 'date-fns';
 
-// CatorcenaChart recibe props.data: arreglo de objetos { periodo: string, Ingresos, Gastos, Tarjetas }
+/**
+ * Componente de apoyo que presenta un resumen de las catorcenas en forma de
+ * tabla. Se listan los periodos y los totales de ingresos, gastos y cargos
+ * de tarjetas. Este componente es deliberadamente simple para evitar
+ * dependencias externas de gráficos; si se desea un gráfico más elaborado,
+ * puede reemplazarse por una biblioteca como Recharts en el futuro.
+ *
+ * @param {Object[]} data Arreglo de objetos con las claves periodo,
+ *   Ingresos, Gastos y Tarjetas.
+ */
 export default function CatorcenaChart({ data }) {
-  // Convertir periodo "dd MMM - dd MMM" a fecha para ejes (opcional)
-  const formatted = data.map(item => ({
-    ...item,
-    // parseamos fecha inicial para eje X (usamos primer día)
-    _fecha: parse(item.periodo.split(' - ')[0], 'dd MMM', new Date())
-  }));
-
   return (
-    <ResponsiveContainer width="100%" height={300}>
-      <BarChart data={formatted} margin={{ top: 20, right: 30, left: 0, bottom: 5 }}>
-        <XAxis
-          dataKey="periodo"
-          tickFormatter={str => str.split(' - ')[0]}
-          interval={0}
-          angle={-45}
-          textAnchor="end"
-          height={60}
-        />
-        <YAxis />
-        <Tooltip formatter={value => `$${Number(value).toFixed(2)}`} />
-+      <Bar dataKey="Ingresos" stackId="a" fill="#4CAF50" />
-+      <Bar dataKey="Gastos"   stackId="a" fill="#F44336" />
-+      <Bar dataKey="Tarjetas" stackId="a" fill="#FF9800" />
-      </BarChart>
-    </ResponsiveContainer>
+    <div>
+      <h5 className="mb-3">Resumen de catorcenas</h5>
+      <div className="table-responsive">
+        <table className="table table-sm table-bordered">
+          <thead className="table-light">
+            <tr>
+              <th>Periodo</th>
+              <th className="text-success">Ingresos</th>
+              <th className="text-danger">Gastos</th>
+              <th className="text-warning">Tarjetas</th>
+              <th className="text-primary">Balance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.map((row, idx) => {
+              const ingresos = row.Ingresos || 0;
+              const gastos = row.Gastos || 0;
+              const tarjetas = row.Tarjetas || 0;
+              const balance = ingresos + gastos + tarjetas;
+              return (
+                <tr key={idx}>
+                  <td>{row.periodo}</td>
+                  <td className="text-success">${ingresos.toFixed(2)}</td>
+                  <td className="text-danger">-${Math.abs(gastos).toFixed(2)}</td>
+                  <td className="text-warning">${Math.abs(tarjetas).toFixed(2)}</td>
+                  <td className={balance >= 0 ? 'text-success' : 'text-danger'}>
+                    {balance >= 0 ? '+' : '-'}${Math.abs(balance).toFixed(2)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

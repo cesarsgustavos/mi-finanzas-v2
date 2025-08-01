@@ -326,6 +326,30 @@ export default function DashboardCatorcenal() {
     });
   };
 
+  /**
+   * Marca o desmarca todos los cargos de tarjeta de una catorcena. Recibe
+   * la lista de identificadores de los pagos generados para tarjetas y
+   * actualiza el estado `pagados` marcando o desmarcando cada uno de ellos
+   * a través de la función `togglePagado`. Si todos los cargos están ya
+   * marcados, los desmarca; de lo contrario, los marca todos.
+   *
+   * @param {number} index Índice de la catorcena
+   * @param {string[]} chargeIds Listado de identificadores de cargos
+   */
+  const toggleTodosTarjeta = (index, chargeIds) => {
+    const currentIds = pagados[index] || [];
+    const allSelected = chargeIds.every(id => currentIds.includes(id));
+    chargeIds.forEach(uid => {
+      // Si todos están seleccionados, desmarca sólo los seleccionados actuales
+      // de lo contrario, marca sólo los que no lo están todavía
+      if (allSelected && currentIds.includes(uid)) {
+        togglePagado(index, uid);
+      } else if (!allSelected && !currentIds.includes(uid)) {
+        togglePagado(index, uid);
+      }
+    });
+  };
+
   // Preparar datos para la gráfica de barras general
   const chartData = catorcenas.map(c => {
     const ingresos = movimientos.filter(m => m.tipo === 'ingreso' && enCatorcena(m, c.inicio, c.fin)).reduce((sum, m) => sum + calcularImporte(m), 0);
@@ -384,18 +408,13 @@ export default function DashboardCatorcenal() {
         const balance = ingresosTotal - gastosTotal - tarjetasTotal;
         const mostrar = columnaAbierta === i;
         // Calcular porcentajes para el gráfico de pastel
-        const totalPie = ingresosTotal + gastosTotal + tarjetasTotal;
-        const ingresosPerc = totalPie > 0 ? (ingresosTotal / totalPie) * 100 : 0;
-        const gastosPerc = totalPie > 0 ? (gastosTotal / totalPie) * 100 : 0;
-        const tarjetasPerc = totalPie > 0 ? (tarjetasTotal / totalPie) * 100 : 0;
-        const stop1 = ingresosPerc;
-        const stop2 = ingresosPerc + gastosPerc;
-        const pieStyle = {
-          width: '70px',
-          height: '70px',
-          borderRadius: '50%',
-          background: `conic-gradient(#198754 0% ${stop1}%, #dc3545 ${stop1}% ${stop2}%, #ffc107 ${stop2}% 100%)`
-        };
+        // Calcular alturas relativas para el gráfico de barras. Se toma el valor
+        // máximo entre ingresos, gastos y cargos de tarjetas para normalizar
+        // las alturas. Si no hay datos, las alturas serán 0.
+        const maxVal = Math.max(ingresosTotal, gastosTotal, tarjetasTotal);
+        const ingresosHeight = maxVal > 0 ? (ingresosTotal / maxVal) * 60 : 0;
+        const gastosHeight = maxVal > 0 ? (gastosTotal / maxVal) * 60 : 0;
+        const tarjetasHeight = maxVal > 0 ? (tarjetasTotal / maxVal) * 60 : 0;
         // Preparar lista de cargos de tarjeta para esta catorcena
         const tarjetasDetalles = tarjetas.map(t => {
           const gastosTarjeta = [];
@@ -423,8 +442,24 @@ export default function DashboardCatorcenal() {
                   <div className="text-danger me-3">- ${gastosTotal.toFixed(2)}</div>
                   <div className="text-warning me-3">${tarjetasTotal.toFixed(2)}</div>
                 </div>
+                {/* Representación gráfica: barras verticales que comparan ingresos,
+                    gastos y cargos de tarjetas. Se calcula la altura
+                    proporcional a la categoría con mayor valor absoluto. */}
                 <div className="d-flex align-items-center mb-2">
-                  <div style={pieStyle}></div>
+                  <div className="d-flex align-items-end" style={{ width: '60px', height: '70px' }}>
+                    {/* Barra de ingresos */}
+                    <div
+                      style={{ flex: 1, margin: '0 2px', backgroundColor: '#198754', height: `${ingresosHeight}px` }}
+                    ></div>
+                    {/* Barra de gastos */}
+                    <div
+                      style={{ flex: 1, margin: '0 2px', backgroundColor: '#dc3545', height: `${gastosHeight}px` }}
+                    ></div>
+                    {/* Barra de cargos de tarjetas */}
+                    <div
+                      style={{ flex: 1, margin: '0 2px', backgroundColor: '#ffc107', height: `${tarjetasHeight}px` }}
+                    ></div>
+                  </div>
                   <div className="ms-3 small">
                     <div><span className="badge bg-success me-1">&nbsp;</span>Ingresos</div>
                     <div><span className="badge bg-danger me-1">&nbsp;</span>Gastos</div>
@@ -443,9 +478,9 @@ export default function DashboardCatorcenal() {
                       <h6 className="text-success">Ingresos</h6>
                       {ingresos.length === 0 && <div className="text-muted">Sin ingresos</div>}
                       {ingresos.map(m => (
-                        <div key={m.id} className="d-flex align-items-center mb-1">
-                          <span className="me-2">+ ${calcularImporte(m).toFixed(2)}</span>
-                          <span>{m.descripcion}</span>
+                        <div key={m.id} className="d-flex flex-wrap align-items-start mb-1">
+                          <span className="me-2 fw-semibold text-success">+ ${calcularImporte(m).toFixed(2)}</span>
+                          <span className="flex-grow-1">{m.descripcion}</span>
                           {m.frecuenciaTipo === 'recurrente' && <span className="badge bg-info ms-2">Recurrente</span>}
                         </div>
                       ))}
@@ -455,15 +490,18 @@ export default function DashboardCatorcenal() {
                       <h6 className="text-danger">Gastos</h6>
                       {gastos.length === 0 && <div className="text-muted">Sin gastos</div>}
                       {gastos.map(m => (
-                        <div key={m.id} className="d-flex align-items-center mb-1">
+                        <div key={m.id} className="d-flex flex-wrap align-items-start mb-1">
                           <input
                             type="checkbox"
                             className="form-check-input me-2"
                             checked={pagados[i]?.includes(m.id) || false}
                             onChange={() => togglePagado(i, m.id)}
                           />
-                          <span className="me-2">- ${calcularImporte(m).toFixed(2)}</span>
-                          <span style={{ textDecoration: pagados[i]?.includes(m.id) ? 'line-through' : 'none', color: pagados[i]?.includes(m.id) ? 'green' : 'inherit' }}>
+                          <span className="me-2 fw-semibold text-danger">- ${calcularImporte(m).toFixed(2)}</span>
+                          <span
+                            className="flex-grow-1"
+                            style={{ textDecoration: pagados[i]?.includes(m.id) ? 'line-through' : 'none', color: pagados[i]?.includes(m.id) ? 'green' : 'inherit' }}
+                          >
                             {m.descripcion}
                           </span>
                           {m.frecuenciaTipo === 'recurrente' && <span className="badge bg-info ms-2">Recurrente</span>}
@@ -472,7 +510,28 @@ export default function DashboardCatorcenal() {
                     </div>
                     {/* Columna de tarjetas */}
                     <div className="col-md-4 mb-3">
-                      <h6 className="text-warning">Tarjetas</h6>
+                      {/* Encabezado de tarjetas y botón para marcar todos */}
+                      {(() => {
+                        // Construir lista de identificadores de cargos para comprobar si todos están seleccionados
+                        const chargeIds = tarjetasDetalles.reduce((acc, tDet) => {
+                          return acc.concat(tDet.gastos.map(det => `${det.tId}-${det.gIdx}-${det.pagoIdx}`));
+                        }, []);
+                        const allSelected = chargeIds.length > 0 && chargeIds.every(id => (pagados[i] || []).includes(id));
+                        return (
+                          <div className="d-flex justify-content-between align-items-center mb-2">
+                            <h6 className="text-warning mb-0">Tarjetas</h6>
+                            {chargeIds.length > 0 && (
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-outline-secondary"
+                                onClick={() => toggleTodosTarjeta(i, chargeIds)}
+                              >
+                                {allSelected ? 'Desmarcar todos' : 'Marcar todos'}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
                       {tarjetasDetalles.length === 0 && <div className="text-muted">Sin cargos en tarjetas</div>}
                       {tarjetasDetalles.map(item => (
                         <div key={item.tarjeta.id} className="mb-2 p-2 border rounded">
@@ -481,15 +540,18 @@ export default function DashboardCatorcenal() {
                             const uid = `${det.tId}-${det.gIdx}-${det.pagoIdx}`;
                             const g = det.gasto;
                             return (
-                              <div key={uid} className="d-flex align-items-center mb-1">
+                              <div key={uid} className="d-flex flex-wrap align-items-start mb-1">
                                 <input
                                   type="checkbox"
                                   className="form-check-input me-2"
                                   checked={pagados[i]?.includes(uid) || false}
                                   onChange={() => togglePagado(i, uid)}
                                 />
-                                <span className="me-2">- ${obtenerPagoTarjeta(g).toFixed(2)}</span>
-                                <span style={{ textDecoration: pagados[i]?.includes(uid) ? 'line-through' : 'none', color: pagados[i]?.includes(uid) ? 'green' : 'inherit' }}>
+                                <span className="me-2 fw-semibold text-danger">- ${obtenerPagoTarjeta(g).toFixed(2)}</span>
+                                <span
+                                  className="flex-grow-1"
+                                  style={{ textDecoration: pagados[i]?.includes(uid) ? 'line-through' : 'none', color: pagados[i]?.includes(uid) ? 'green' : 'inherit' }}
+                                >
                                   {g.descripcion}
                                 </span>
                                 {(g.frecuenciaTipo === 'recurrente' || (g.frecuencia && g.frecuencia !== 'único')) && (
