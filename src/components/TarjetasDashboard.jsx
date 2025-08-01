@@ -28,6 +28,10 @@ function TarjetasDashboard() {
   // Controla si el checkbox de MSI está activado para cada tarjeta; esto nos
   // permite mostrar u ocultar el campo de número de meses sin dejar espacio
   const [esMSISeleccionado, setEsMSISeleccionado] = useState({});
+  // Índice de la tarjeta actualmente expandida para ver sus detalles.  Si es
+  // null, todas las tarjetas se muestran en modo compacto.  Esto permite
+  // comprimir la lista de tarjetas como un menú y expandirlas al hacer clic.
+  const [tarjetaAbierta, setTarjetaAbierta] = useState(null);
 
   // Carga inicial de las tarjetas desde Firebase
   useEffect(() => {
@@ -37,6 +41,11 @@ function TarjetasDashboard() {
       setTarjetas(tarjetasData);
     };
     fetchTarjetas();
+  }, []);
+
+  // Al montar el componente establecemos el título de la pestaña para todo el proyecto.
+  useEffect(() => {
+    document.title = 'MIS FINANZAS';
   }, []);
 
   /**
@@ -314,27 +323,56 @@ function TarjetasDashboard() {
       {tarjetas.length === 0 ? (
         <p className="text-muted">Aún no has registrado tarjetas.</p>
       ) : (
-        <div className="row g-4">
+        <div className="list-group">
           {tarjetas.map((t, i) => {
+            // Calculamos el ciclo y el total del ciclo para esta tarjeta
             const { inicio, fin } = calcularRangoCorte(t.diaCorte);
             const totalCiclo = calcularTotalEnCiclo(t.gastos, inicio, fin);
+            const abierta = tarjetaAbierta === i;
+            // Calcular el porcentaje de gasto sobre el límite de crédito
+            const porcentaje = t.limiteCredito ? (totalCiclo / t.limiteCredito) * 100 : 0;
+            const percentLabel = `${Math.min(porcentaje, 100).toFixed(0)}%`;
             return (
-              <div key={i} className="col-md-6">
-                <div className="card shadow-sm h-100">
-                  <div className="card-body d-flex flex-column">
-                    <div className="d-flex justify-content-between align-items-center mb-2">
-                      <h6 className="mb-0">{t.nombre}</h6>
-                      <div className="btn-group" role="group">
+              <div key={t.id || i} className="list-group-item p-0 mb-2 border rounded">
+                {/* Encabezado compacto con barra de progreso */}
+                <div className="d-flex justify-content-between align-items-center p-3">
+                  <div className="me-3" style={{ minWidth: '120px' }}>
+                    <h6 className="mb-0">{t.nombre}</h6>
+                    <small className="text-muted">{format(inicio, 'dd MMM')} - {format(fin, 'dd MMM')}</small>
+                  </div>
+                  <div className="flex-grow-1 me-3">
+                    <div className="progress" style={{ height: '6px' }}>
+                      <div
+                        className="progress-bar"
+                        role="progressbar"
+                        style={{ width: `${Math.min(porcentaje, 100)}%` }}
+                        aria-valuenow={porcentaje}
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                      ></div>
+                    </div>
+                    <small className="text-muted">{percentLabel} del límite</small>
+                  </div>
+                  <button className="btn btn-link" onClick={() => setTarjetaAbierta(abierta ? null : i)}>
+                    {abierta ? 'Ocultar' : 'Detalles'}
+                  </button>
+                </div>
+                {/* Cuerpo desplegable con detalles */}
+                {abierta && (
+                  <div className="p-3 border-top">
+                    <div className="d-flex justify-content-between align-items-start flex-wrap mb-2">
+                      <div>
+                        <p className="small mb-1">Límite: ${t.limiteCredito.toFixed(2)}</p>
+                        <p className="text-success small mb-1">Ciclo actual: {format(inicio, 'dd MMM yyyy')} - {format(fin, 'dd MMM yyyy')}</p>
+                        <p className="fw-bold text-danger mb-1">Total en este ciclo: ${totalCiclo.toFixed(2)}</p>
+                      </div>
+                      <div className="ms-auto d-flex gap-2">
                         <button className="btn btn-sm btn-outline-primary" onClick={() => handleEditarTarjeta(i)}>Editar</button>
                         <button className="btn btn-sm btn-outline-danger" onClick={() => handleEliminarTarjeta(i)}>Eliminar</button>
                       </div>
                     </div>
-                    <p className="small mb-1">Corte: día {t.diaCorte} | Crédito: {t.diasCredito} días</p>
-                    <p className="small mb-1">Límite: ${t.limiteCredito.toFixed(2)}</p>
-                    <p className="text-success small">Ciclo actual: {format(inicio,'dd MMM yyyy')} - {format(fin,'dd MMM yyyy')}</p>
-                    <p className="fw-bold text-danger">Total en este ciclo: ${totalCiclo.toFixed(2)}</p>
-
-                    <form onSubmit={e => handleGastoSubmit(i, e)} className="mb-3 border-top pt-3 mt-auto">
+                    {/* Formulario para agregar gasto */}
+                    <form onSubmit={e => handleGastoSubmit(i, e)} className="mb-3 border-top pt-3">
                       <div className="row g-2 mb-2">
                         <div className="col-6">
                           <input name="descripcion" className="form-control" placeholder="Descripción" required />
@@ -343,7 +381,12 @@ function TarjetasDashboard() {
                           <input name="monto" type="number" className="form-control" placeholder="Monto" required />
                         </div>
                         <div className="col-3">
-                          <select name="tipo" className="form-select" onChange={e => setTipoGastoSeleccionado(prev => ({ ...prev, [i]: e.target.value }))} defaultValue={tipoGastoSeleccionado[i] || 'unico'}>
+                          <select
+                            name="tipo"
+                            className="form-select"
+                            onChange={e => setTipoGastoSeleccionado(prev => ({ ...prev, [i]: e.target.value }))}
+                            defaultValue={tipoGastoSeleccionado[i] || 'unico'}
+                          >
                             <option value="unico">Único</option>
                             <option value="recurrente">Recurrente</option>
                           </select>
@@ -356,7 +399,12 @@ function TarjetasDashboard() {
                       {/* Controles para gasto recurrente */}
                       {tipoGastoSeleccionado[i] === 'recurrente' && (
                         <>
-                          <select name="frecuencia" className="form-select mb-2" onChange={e => setFrecuenciaSeleccionada(prev => ({ ...prev, [i]: e.target.value }))} defaultValue={frecuenciaSeleccionada[i] || ''}>
+                          <select
+                            name="frecuencia"
+                            className="form-select mb-2"
+                            onChange={e => setFrecuenciaSeleccionada(prev => ({ ...prev, [i]: e.target.value }))}
+                            defaultValue={frecuenciaSeleccionada[i] || ''}
+                          >
                             <option value="">Selecciona frecuencia</option>
                             <option value="mensual">Mensual</option>
                             <option value="semanal">Semanal</option>
@@ -385,8 +433,16 @@ function TarjetasDashboard() {
                       {/* Controles para MSI */}
                       <div className="row g-2 mb-2 align-items-center">
                         <div className="col-auto d-flex align-items-center">
-                          <input name="esMSI" type="checkbox" className="form-check-input" id={`msi-${i}`} onChange={e => setEsMSISeleccionado(prev => ({ ...prev, [i]: e.target.checked }))} />
-                          <label htmlFor={`msi-${i}`} className="form-check-label ms-2">¿MSI?</label>
+                          <input
+                            name="esMSI"
+                            type="checkbox"
+                            className="form-check-input"
+                            id={`msi-${i}`}
+                            onChange={e => setEsMSISeleccionado(prev => ({ ...prev, [i]: e.target.checked }))}
+                          />
+                          <label htmlFor={`msi-${i}`} className="form-check-label ms-2">
+                            ¿MSI?
+                          </label>
                         </div>
                         {esMSISeleccionado[i] && (
                           <div className="col-4">
@@ -396,9 +452,8 @@ function TarjetasDashboard() {
                       </div>
                       <button type="submit" className="btn btn-outline-primary w-100 btn-sm">Agregar gasto</button>
                     </form>
-
                     {/* Lista de gastos */}
-                    <ul className="list-group small mt-3">
+                    <ul className="list-group small">
                       {t.gastos
                         .filter(g => mostrarHistoricos || g.tipo === 'recurrente' || (g.fecha && estaEnRango(g.fecha, inicio, fin)))
                         .map((g, j) => (
@@ -406,9 +461,7 @@ function TarjetasDashboard() {
                             <div>
                               <strong>{g.descripcion}</strong> — ${g.monto.toFixed(2)}<br />
                               <small>
-                                {g.tipo === 'unico'
-                                  ? `Único • Fecha: ${g.fecha}`
-                                  : `Recurrente • ${g.frecuencia} ${(g.diaMes || g.diaSemana) || ''}`}
+                                {g.tipo === 'unico' ? `Único • Fecha: ${g.fecha}` : `Recurrente • ${g.frecuencia} ${(g.diaMes || g.diaSemana) || ''}`}
                                 {g.esMSI && g.mesesMSI && ` • ${g.mesesMSI} MSI`}
                                 {g.fechaInicio && ` • Inicio: ${g.fechaInicio}`}
                               </small>
@@ -420,7 +473,7 @@ function TarjetasDashboard() {
                         ))}
                     </ul>
                   </div>
-                </div>
+                )}
               </div>
             );
           })}
