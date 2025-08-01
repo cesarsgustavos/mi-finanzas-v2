@@ -379,6 +379,13 @@ export default function DashboardCatorcenal() {
     saveAs(new Blob([data], { type: 'application/octet-stream' }), `dashboard_${anioSeleccionado}.xlsx`);
   };
 
+  // Calcular la catorcena actual o la próxima catorcena a partir de la fecha actual. Este índice se
+  // utiliza para resaltar la tarjeta correspondiente en color verde. Si todas las catorcenas son
+  // anteriores al día de hoy, nextCatorcenaIndex será -1 y no se resaltará ninguna. Si hoy cae
+  // dentro de una catorcena, se tomará esa como la catorcena destacada.
+  const nowDate = new Date();
+  const nextCatorcenaIndex = catorcenas.findIndex(ct => ct.fin >= nowDate);
+
   return (
     <>
       {/* Controles superiores: exportar y seleccionar año */}
@@ -407,7 +414,7 @@ export default function DashboardCatorcenal() {
         const gastosTotal = gastos.reduce((sum, m) => sum + calcularImporte(m), 0);
         const balance = ingresosTotal - gastosTotal - tarjetasTotal;
         const mostrar = columnaAbierta === i;
-        // Calcular porcentajes para el gráfico de pastel
+        // Calculamos las alturas para las barras del gráfico comparativo
         // Calcular alturas relativas para el gráfico de barras. Se toma el valor
         // máximo entre ingresos, gastos y cargos de tarjetas para normalizar
         // las alturas. Si no hay datos, las alturas serán 0.
@@ -427,8 +434,35 @@ export default function DashboardCatorcenal() {
           const totalGastosTarjeta = gastosTarjeta.reduce((s, item) => s + obtenerPagoTarjeta(item.gasto), 0);
           return { tarjeta: t, gastos: gastosTarjeta, total: totalGastosTarjeta };
         }).filter(item => item.gastos.length > 0);
+        // Definir colores de fondo dependiendo de si la catorcena es pasada con pendientes, la siguiente a atender o futura
+        const esPasada = c.fin < nowDate;
+        // Calcular identificadores de gastos normales y cargos de tarjetas para detectar pendientes
+        const gastoIds = gastos.map(m => m.id);
+        const chargeIdsAll = [];
+        tarjetas.forEach(t => {
+          (t.gastos || []).forEach((g, gIdx) => {
+            const pagos = obtenerFechasPagoEnCatorcena(g, t, c.inicio, c.fin);
+            pagos.forEach((_, pagoIdx) => {
+              chargeIdsAll.push(`${t.id}-${gIdx}-${pagoIdx}`);
+            });
+          });
+        });
+        const pendientesTotales = [...gastoIds, ...chargeIdsAll].filter(id => !(pagados[i] || []).includes(id)).length;
+        const cardStyle = {};
+        if (esPasada && pendientesTotales > 0) {
+          // Periodo pasado con pendientes sin pagar: tono rojizo
+          cardStyle.backgroundColor = '#f8d7da';
+        } else if (i === nextCatorcenaIndex) {
+          // Para la catorcena actual o la siguiente: amarillo si hay pendientes, verde si todo está pagado
+          if (pendientesTotales > 0) {
+            cardStyle.backgroundColor = '#fff3cd';
+          } else {
+            cardStyle.backgroundColor = '#d1e7dd';
+          }
+        }
+
         return (
-          <div key={i} className="card shadow-sm mb-3">
+          <div key={i} className="card shadow-sm mb-3" style={cardStyle}>
             <div className="card-body">
               <div className="d-flex justify-content-between align-items-center flex-wrap">
                 <div className="mb-2" style={{ minWidth: '150px' }}>
