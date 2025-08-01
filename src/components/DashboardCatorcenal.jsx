@@ -106,8 +106,14 @@ function obtenerFechasPagoEnCatorcena(g, tarjeta, inicioCatorcena, finCatorcena)
     return fechas;
   }
 
+  // Determine if this expense should be treated as recurrent.  Card expenses
+  // may not define `frecuenciaTipo` like movements do.  In that case, any
+  // defined `frecuencia` other than "único" is considered recurrent.
+  const esRecurrente = g.frecuenciaTipo === 'recurrente' || (
+    g.frecuencia && g.frecuencia !== 'único'
+  );
   // For recurrent expenses we generate occurrences according to their frequency
-  if (g.frecuenciaTipo === 'recurrente') {
+  if (esRecurrente) {
     switch (g.frecuencia) {
       case 'diario': {
         // Purchases every day starting from fechaBase
@@ -545,7 +551,9 @@ export default function DashboardCatorcenal() {
                               {g.descripcion}
                             </span>
                             {/* Mostrar etiqueta de recurrente para gastos de tarjeta que no son únicos */}
-                            {g.frecuenciaTipo === 'recurrente' && <span className="badge bg-info ms-2">Recurrente</span>}
+                            {(g.frecuenciaTipo === 'recurrente' || (g.frecuencia && g.frecuencia !== 'único')) && (
+                              <span className="badge bg-info ms-2">Recurrente</span>
+                            )}
                             {g.esMSI && g.mesesMSI && <span className="badge bg-warning text-dark ms-2">{g.mesesMSI} MSI</span>}
                           </div>
                         );
