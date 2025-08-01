@@ -31,6 +31,22 @@ function calcularImporte(m) {
 }
 
 /**
+ * Calculate the per-payment amount for a credit card expense. For MSI charges,
+ * the total amount is divided equally across the number of months specified.
+ * All other charges return the full amount.
+ *
+ * @param {Object} g Card expense object
+ * @returns {number} The amount due for the current catorcena
+ */
+function obtenerPagoTarjeta(g) {
+  if (g.esMSI && g.mesesMSI) {
+    const meses = Number(g.mesesMSI);
+    return meses > 0 ? g.monto / meses : g.monto;
+  }
+  return g.monto;
+}
+
+/**
  * DashboardCatorcenal component
  *
  * This component renders a list of 26 catorcenas (14‑day periods) for the
@@ -89,19 +105,19 @@ export default function DashboardCatorcenal() {
   }, [anioSeleccionado]);
 
   useEffect(() => {
-  const cargarPagados = async () => {
-    const snap = await getDocs(collection(db, 'pagosMarcados'));
-    const data = {};
-    snap.forEach(doc => {
-      const { catorcenaIndex, movimientoId } = doc.data();
-      if (!data[catorcenaIndex]) data[catorcenaIndex] = [];
-      data[catorcenaIndex].push(movimientoId);
-    });
-    setPagados(data);
-  };
+    const cargarPagados = async () => {
+      const snap = await getDocs(collection(db, 'pagosMarcados'));
+      const data = {};
+      snap.forEach(doc => {
+        const { catorcenaIndex, movimientoId } = doc.data();
+        if (!data[catorcenaIndex]) data[catorcenaIndex] = [];
+        data[catorcenaIndex].push(movimientoId);
+      });
+      setPagados(data);
+    };
 
-  cargarPagados();
-}, []);
+    cargarPagados();
+  }, []);
 
   /**
    * Determine whether a movement belongs to the given catorcena.  The logic
@@ -152,48 +168,51 @@ export default function DashboardCatorcenal() {
 
   /**
    * Compute the total due for a credit card in a given catorcena.  This
-   * implementation is identical to the original one and determines which
-   * charges fall within the billing cycle based on cut dates and credit days.
+   * implementation determines which charges fall within the billing cycle
+   * based on cut dates and credit days.  For MSI charges the amount is
+   * divided equally across the number of months specified.
    */
   const calcularTotalTarjeta = (t, inicio, fin) => {
-  const gastos = (t.gastos || []).filter(g => {
-    const base = g.fecha ? parseISO(g.fecha) : (g.fechaInicio ? parseISO(g.fechaInicio) : null);
-    if (!base) return false;
+    const gastos = (t.gastos || []).filter(g => {
+      const base = g.fecha ? parseISO(g.fecha) : (g.fechaInicio ? parseISO(g.fechaInicio) : null);
+      if (!base) return false;
 
-    const corte = t.diaCorte;
-    const diasCredito = t.diasCredito;
-    const posibleCorte = new Date(base);
-    posibleCorte.setDate(corte);
-    if (base.getDate() > corte) {
-      posibleCorte.setMonth(posibleCorte.getMonth() + 1);
-    }
-
-    const fechasPago = [];
-
-    if (g.esMSI && g.mesesMSI) {
-      for (let j = 0; j < Number(g.mesesMSI); j++) {
-        const cuota = new Date(posibleCorte);
-        cuota.setMonth(cuota.getMonth() + j);
-        fechasPago.push(addDays(cuota, diasCredito));
+      const corte = t.diaCorte;
+      const diasCredito = t.diasCredito;
+      const posibleCorte = new Date(base);
+      posibleCorte.setDate(corte);
+      if (base.getDate() > corte) {
+        posibleCorte.setMonth(posibleCorte.getMonth() + 1);
       }
-    } else if (g.frecuencia === 'mensual' && g.diaMes) {
-      const dia = parseInt(g.diaMes, 10);
-      const ocurrencia = new Date(inicio.getFullYear(), inicio.getMonth(), dia);
-      if (ocurrencia >= base && ocurrencia >= inicio && ocurrencia <= fin) {
-        fechasPago.push(addDays(ocurrencia, diasCredito));
+
+      const fechasPago = [];
+
+      // MSI: generate payment dates for each month in the plan
+      if (g.esMSI && g.mesesMSI) {
+        for (let j = 0; j < Number(g.mesesMSI); j++) {
+          const cuota = new Date(posibleCorte);
+          cuota.setMonth(cuota.getMonth() + j);
+          fechasPago.push(addDays(cuota, diasCredito));
+        }
+      } else if (g.frecuencia === 'mensual' && g.diaMes) {
+        const dia = parseInt(g.diaMes, 10);
+        const ocurrencia = new Date(inicio.getFullYear(), inicio.getMonth(), dia);
+        if (ocurrencia >= base && ocurrencia >= inicio && ocurrencia <= fin) {
+          fechasPago.push(addDays(ocurrencia, diasCredito));
+        }
+      } else {
+        // Para único y otras recurrencias, la primera fecha de pago
+        fechasPago.push(addDays(posibleCorte, diasCredito));
       }
-    } else {
-      fechasPago.push(addDays(posibleCorte, diasCredito));
-    }
 
-    return fechasPago.some(fp =>
-      (isAfter(fp, inicio) || isEqual(fp, inicio)) &&
-      (isBefore(fp, fin) || isEqual(fp, fin))
-    );
-  });
+      return fechasPago.some(fp =>
+        (isAfter(fp, inicio) || isEqual(fp, inicio)) &&
+        (isBefore(fp, fin) || isEqual(fp, fin))
+      );
+    });
 
-  return gastos.reduce((s, g) => s + g.monto, 0);
-};
+    return gastos.reduce((s, g) => s + obtenerPagoTarjeta(g), 0);
+  };
 
   /**
    * Toggle the covered state for a given movement within a specific catorcena.
@@ -203,29 +222,29 @@ export default function DashboardCatorcenal() {
    * @param {number} index Index of the catorcena in the list
    * @param {string} id ID of the movement or card charge
    */
- const togglePagado = async (index, id) => {
-  setPagados(prev => {
-    const current = prev[index] || [];
-    const yaMarcado = current.includes(id);
-    const nuevoEstado = yaMarcado
-      ? current.filter(item => item !== id)
-      : [...current, id];
+  const togglePagado = async (index, id) => {
+    setPagados(prev => {
+      const current = prev[index] || [];
+      const yaMarcado = current.includes(id);
+      const nuevoEstado = yaMarcado
+        ? current.filter(item => item !== id)
+        : [...current, id];
 
-    // Guardar o eliminar en Firestore
-    const docRef = doc(db, 'pagosMarcados', `${index}_${id}`);
-    if (yaMarcado) {
-      deleteDoc(docRef); // desmarcar
-    } else {
-      setDoc(docRef, {
-        catorcenaIndex: index,
-        movimientoId: id,
-        timestamp: new Date().toISOString()
-      });
-    }
+      // Guardar o eliminar en Firestore
+      const docRef = doc(db, 'pagosMarcados', `${index}_${id}`);
+      if (yaMarcado) {
+        deleteDoc(docRef); // desmarcar
+      } else {
+        setDoc(docRef, {
+          catorcenaIndex: index,
+          movimientoId: id,
+          timestamp: new Date().toISOString()
+        });
+      }
 
-    return { ...prev, [index]: nuevoEstado };
-  });
-};
+      return { ...prev, [index]: nuevoEstado };
+    });
+  };
 
   /**
    * Prepare data for the catorcena bar chart.  Expenses and card totals are
@@ -269,23 +288,22 @@ export default function DashboardCatorcenal() {
   };
 
   return (
-    <div className="container-fluid">
+    <>
       {/* Export button and year selector */}
       <div className="d-flex justify-content-between align-items-center mb-3">
-        <button className="btn btn-primary" onClick={exportarExcel}>📥 Exportar a Excel</button>
+        <button className="btn btn-outline-primary" onClick={exportarExcel}>
+          📥 Exportar a Excel
+        </button>
         <div>
           <label className="me-2">Selecciona año:</label>
-          <select
-            className="form-select d-inline-block w-auto"
-            value={anioSeleccionado}
-            onChange={e => setAnioSeleccionado(Number(e.target.value))}
-          >
+          <select value={anioSeleccionado} onChange={(e) => setAnioSeleccionado(Number(e.target.value))} className="form-select d-inline-block w-auto">
             <option value={2025}>2025</option>
             <option value={2026}>2026</option>
             <option value={2027}>2027</option>
           </select>
         </div>
       </div>
+
       {/* Render catorcenas list */}
       {catorcenas.map((c, i) => {
         const ingresos = movimientos
@@ -295,178 +313,159 @@ export default function DashboardCatorcenal() {
           .filter(m => m.tipo === 'gasto' && enCatorcena(m, c.inicio, c.fin))
           .sort((a, b) => new Date(a.fecha || a.fechaInicio) - new Date(b.fecha || b.fechaInicio));
         const tarjetasTotal = tarjetas.reduce((sum, t) => {
-  const gt = (t.gastos || []).filter(g => {
-    const base = g.fecha ? parseISO(g.fecha) : (g.fechaInicio ? parseISO(g.fechaInicio) : null);
-    if (!base) return false;
-    const corte = t.diaCorte;
-    const diasCredito = t.diasCredito;
-    const posibleCorte = new Date(base);
-    posibleCorte.setDate(corte);
-    if (base.getDate() > corte) {
-      posibleCorte.setMonth(posibleCorte.getMonth() + 1);
-    }
-    const fechasPago = [];
-    if (g.esMSI && g.mesesMSI) {
-      for (let j = 0; j < Number(g.mesesMSI); j++) {
-        const cuota = new Date(posibleCorte);
-        cuota.setMonth(cuota.getMonth() + j);
-        fechasPago.push(addDays(cuota, diasCredito));
-      }
-    } else if (g.frecuencia === 'mensual' && g.diaMes) {
-      const dia = parseInt(g.diaMes, 10);
-      const ocurrencia = new Date(c.inicio.getFullYear(), c.inicio.getMonth(), dia);
-      if (ocurrencia >= base && ocurrencia >= c.inicio && ocurrencia <= c.fin) {
-        fechasPago.push(addDays(ocurrencia, diasCredito));
-      }
-    } else {
-      fechasPago.push(addDays(posibleCorte, diasCredito));
-    }
-    return fechasPago.some(fp =>
-      (isAfter(fp, c.inicio) || isEqual(fp, c.inicio)) &&
-      (isBefore(fp, c.fin) || isEqual(fp, c.fin))
-    );
-  });
-  return sum + gt.reduce((s, g) => s + g.monto, 0);
-}, 0);
+          // Filtrar gastos de tarjeta que caen en esta catorcena
+          const gt = (t.gastos || []).filter(g => {
+            const base = g.fecha ? parseISO(g.fecha) : (g.fechaInicio ? parseISO(g.fechaInicio) : null);
+            if (!base) return false;
+            const corte = t.diaCorte;
+            const diasCredito = t.diasCredito;
+            const posibleCorte = new Date(base);
+            posibleCorte.setDate(corte);
+            if (base.getDate() > corte) {
+              posibleCorte.setMonth(posibleCorte.getMonth() + 1);
+            }
+            const fechasPago = [];
+            if (g.esMSI && g.mesesMSI) {
+              for (let j = 0; j < Number(g.mesesMSI); j++) {
+                const cuota = new Date(posibleCorte);
+                cuota.setMonth(cuota.getMonth() + j);
+                fechasPago.push(addDays(cuota, diasCredito));
+              }
+            } else if (g.frecuencia === 'mensual' && g.diaMes) {
+              const dia = parseInt(g.diaMes, 10);
+              const ocurrencia = new Date(c.inicio.getFullYear(), c.inicio.getMonth(), dia);
+              if (ocurrencia >= base && ocurrencia >= c.inicio && ocurrencia <= c.fin) {
+                fechasPago.push(addDays(ocurrencia, diasCredito));
+              }
+            } else {
+              fechasPago.push(addDays(posibleCorte, diasCredito));
+            }
+            return fechasPago.some(fp =>
+              (isAfter(fp, c.inicio) || isEqual(fp, c.inicio)) &&
+              (isBefore(fp, c.fin) || isEqual(fp, c.fin))
+            );
+          });
+          return sum + gt.reduce((s, g) => s + obtenerPagoTarjeta(g), 0);
+        }, 0);
         const ingresosTotal = ingresos.reduce((sum, m) => sum + calcularImporte(m), 0);
-const gastosTotal = gastos.reduce((sum, m) => sum + calcularImporte(m), 0);
-const balance = ingresosTotal - gastosTotal - tarjetasTotal;
-const mostrar = columnaAbierta === i;
+        const gastosTotal = gastos.reduce((sum, m) => sum + calcularImporte(m), 0);
+        const balance = ingresosTotal - gastosTotal - tarjetasTotal;
+        const mostrar = columnaAbierta === i;
         return (
-          <div key={i} className="card mb-3">
-            <div className="card-header d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center">
+          <div key={i} className="mb-3 p-3 border rounded">
+            <div className="d-flex justify-content-between align-items-center">
+              <div className="fw-bold">
+                {format(c.inicio, 'dd MMM', { locale: es })} – {format(c.fin, 'dd MMM', { locale: es })}
+              </div>
               <div>
-                <h6 className="mb-1">
-                  {format(c.inicio, 'dd MMM', { locale: es })} – {format(c.fin, 'dd MMM', { locale: es })}
-                </h6>
-                <small>
-                  + Ingresos: ${ingresosTotal.toFixed(2)} &nbsp;|&nbsp; - Gastos: ${gastosTotal.toFixed(2)} &nbsp;|&nbsp; 💳 Tarjetas: ${tarjetasTotal.toFixed(2)}
-                </small>
+                <span className="text-success">+ Ingresos: ${ingresosTotal.toFixed(2)}</span> &nbsp;|&nbsp;
+                <span className="text-danger">- Gastos: ${gastosTotal.toFixed(2)}</span> &nbsp;|&nbsp;
+                <span className="text-warning">💳 Tarjetas: ${tarjetasTotal.toFixed(2)}</span>
               </div>
-              <div className="mt-2 mt-md-0 text-md-end">
-                <div className={balance >= 0 ? 'text-success fw-semibold' : 'text-danger fw-semibold'}>
-                  Balance: ${balance.toFixed(2)}
-                </div>
-                <button
-                  className="btn btn-sm btn-link"
-                  onClick={() => setColumnaAbierta(mostrar ? null : i)}
-                >
-                  {mostrar ? 'Ocultar detalles' : 'Ver detalles'}
-                </button>
+              <div className={balance >= 0 ? 'text-success fw-semibold' : 'text-danger fw-semibold'}>
+                Balance: ${balance.toFixed(2)}
               </div>
+              <button className="btn btn-link" onClick={() => setColumnaAbierta(mostrar ? null : i)}>
+                {mostrar ? 'Ocultar detalles' : 'Ver detalles'}
+              </button>
             </div>
             {mostrar && (
-              <div className="card-body">
+              <div className="mt-3">
                 {/* Ingresos list */}
-                <h6 className="fw-bold">🟩 Ingresos</h6>
-                {ingresos.length === 0 && <p className="text-muted">Sin ingresos</p>}
+                <h6 className="text-success">🟩 Ingresos</h6>
+                {ingresos.length === 0 && <div className="text-muted">Sin ingresos</div>}
                 {ingresos.map(m => (
-                  <div key={m.id} className="ms-2">
-                    <span>
-                      + ${calcularImporte(m).toFixed(2)} — {m.descripcion}
-                      {m.frecuenciaTipo === 'recurrente' && <em className="ms-1">Recurrente</em>}
-                    </span>
+                  <div key={m.id} className="d-flex align-items-center mb-1">
+                    <span className="me-2">+ ${calcularImporte(m).toFixed(2)}</span>
+                    <span>{m.descripcion}</span>
+                    {m.frecuenciaTipo === 'recurrente' && <span className="badge bg-info ms-2">Recurrente</span>}
                   </div>
                 ))}
                 {/* Gastos list with checkbox */}
-                <h6 className="fw-bold mt-3">🟥 Gastos</h6>
-                {gastos.length === 0 && <p className="text-muted">Sin gastos</p>}
+                <h6 className="text-danger mt-3">🟥 Gastos</h6>
+                {gastos.length === 0 && <div className="text-muted">Sin gastos</div>}
                 {gastos.map(m => (
-                  <div key={m.id} className="d-flex align-items-center ms-2">
+                  <div key={m.id} className="d-flex align-items-center mb-1">
                     <input
                       type="checkbox"
                       className="form-check-input me-2"
-                      checked={Boolean(pagados[i] && pagados[i].includes(m.id))}
+                      checked={pagados[i]?.includes(m.id) || false}
                       onChange={() => togglePagado(i, m.id)}
                     />
-                    <span
-                      style={pagados[i] && pagados[i].includes(m.id)
-                        ? { textDecoration: 'line-through', color: 'green' }
-                        : {}}
-                    >
-                      - ${calcularImporte(m).toFixed(2)} — {m.descripcion}
-                      {m.frecuenciaTipo === 'recurrente' && <em className="ms-1">Recurrente</em>}
+                    <span className="me-2">- ${calcularImporte(m).toFixed(2)}</span>
+                    <span style={{ textDecoration: pagados[i]?.includes(m.id) ? 'line-through' : 'none', color: pagados[i]?.includes(m.id) ? 'green' : 'inherit' }}>
+                      {m.descripcion}
                     </span>
+                    {m.frecuenciaTipo === 'recurrente' && <span className="badge bg-info ms-2">Recurrente</span>}
                   </div>
                 ))}
                 {/* Card charges section */}
-                <h6 className="fw-bold mt-3">💳 Tarjetas</h6>
+                <h6 className="text-warning mt-3">💳 Tarjetas</h6>
                 {tarjetas.every(t => (t.gastos || []).length === 0) && (
-                  <p className="text-muted ms-2">Sin cargos en tarjetas</p>
+                  <div className="text-muted">Sin cargos en tarjetas</div>
                 )}
                 {tarjetas.map((t) => {
-  const gastosTarjeta = (t.gastos || []).filter((g) => {
-    const base = g.fecha ? parseISO(g.fecha) : (g.fechaInicio ? parseISO(g.fechaInicio) : null);
-    if (!base) return false;
-
-    const corte = t.diaCorte;
-    const diasCredito = t.diasCredito;
-    const posibleCorte = new Date(base);
-    posibleCorte.setDate(corte);
-    if (base.getDate() > corte) {
-      posibleCorte.setMonth(posibleCorte.getMonth() + 1);
-    }
-
-    const fechasPago = [];
-
-    if (g.esMSI && g.mesesMSI) {
-      for (let j = 0; j < Number(g.mesesMSI); j++) {
-        const cuota = new Date(posibleCorte);
-        cuota.setMonth(cuota.getMonth() + j);
-        fechasPago.push(addDays(cuota, diasCredito));
-      }
-    } else if (g.frecuencia === 'mensual' && g.diaMes) {
-      const dia = parseInt(g.diaMes, 10);
-      const ocurrencia = new Date(c.inicio.getFullYear(), c.inicio.getMonth(), dia);
-      if (ocurrencia >= base && ocurrencia >= c.inicio && ocurrencia <= c.fin) {
-        fechasPago.push(addDays(ocurrencia, diasCredito));
-      }
-    } else {
-      fechasPago.push(addDays(posibleCorte, diasCredito));
-    }
-
-    return fechasPago.some(
-      (fp) =>
-        (isAfter(fp, c.inicio) || isEqual(fp, c.inicio)) &&
-        (isBefore(fp, c.fin) || isEqual(fp, c.fin))
-    );
-  });
-
-  if (gastosTarjeta.length === 0) return null;
-
-  const totalGastosTarjeta = gastosTarjeta.reduce((s, g) => s + g.monto, 0);
-
-  return (
-    <div key={t.id} className="ms-2 mb-2">
-      <div className="fw-semibold">
-        {t.nombre + ' — Total: $' + totalGastosTarjeta.toFixed(2)}
-      </div>
-      {gastosTarjeta.map((g, idx) => {
-        const uniqueId = `${t.id}-${idx}`;
-        return (
-          <div key={uniqueId} className="d-flex align-items-center ms-3">
-            <input
-              type="checkbox"
-              className="form-check-input me-2"
-              checked={Boolean(pagados[i] && pagados[i].includes(uniqueId))}
-              onChange={() => togglePagado(i, uniqueId)}
-            />
-            <span
-              style={
-                pagados[i] && pagados[i].includes(uniqueId)
-                  ? { textDecoration: 'line-through', color: 'green' }
-                  : {}
-              }
-            >
-              - ${g.monto.toFixed(2)} — {g.descripcion}
-              {g.frecuenciaTipo === 'recurrente' && <em className="ms-1">Recurrente</em>}
-            </span>
-          </div>
-        );
-      })}
-    </div>
-  );
-})}
+                  const gastosTarjeta = (t.gastos || []).filter((g) => {
+                    const base = g.fecha ? parseISO(g.fecha) : (g.fechaInicio ? parseISO(g.fechaInicio) : null);
+                    if (!base) return false;
+                    const corte = t.diaCorte;
+                    const diasCredito = t.diasCredito;
+                    const posibleCorte = new Date(base);
+                    posibleCorte.setDate(corte);
+                    if (base.getDate() > corte) {
+                      posibleCorte.setMonth(posibleCorte.getMonth() + 1);
+                    }
+                    const fechasPago = [];
+                    if (g.esMSI && g.mesesMSI) {
+                      for (let j = 0; j < Number(g.mesesMSI); j++) {
+                        const cuota = new Date(posibleCorte);
+                        cuota.setMonth(cuota.getMonth() + j);
+                        fechasPago.push(addDays(cuota, diasCredito));
+                      }
+                    } else if (g.frecuencia === 'mensual' && g.diaMes) {
+                      const dia = parseInt(g.diaMes, 10);
+                      const ocurrencia = new Date(c.inicio.getFullYear(), c.inicio.getMonth(), dia);
+                      if (ocurrencia >= base && ocurrencia >= c.inicio && ocurrencia <= c.fin) {
+                        fechasPago.push(addDays(ocurrencia, diasCredito));
+                      }
+                    } else {
+                      fechasPago.push(addDays(posibleCorte, diasCredito));
+                    }
+                    return fechasPago.some(
+                      (fp) =>
+                        (isAfter(fp, c.inicio) || isEqual(fp, c.inicio)) &&
+                        (isBefore(fp, c.fin) || isEqual(fp, c.fin))
+                    );
+                  });
+                  if (gastosTarjeta.length === 0) return null;
+                  const totalGastosTarjeta = gastosTarjeta.reduce((s, g) => s + obtenerPagoTarjeta(g), 0);
+                  return (
+                    <div key={t.id} className="mb-2 p-2 border rounded">
+                      <div className="fw-semibold">
+                        {t.nombre + ' — Total: $' + totalGastosTarjeta.toFixed(2)}
+                      </div>
+                      {gastosTarjeta.map((g, idx) => {
+                        const uniqueId = `${t.id}-${idx}`;
+                        return (
+                          <div key={uniqueId} className="d-flex align-items-center mb-1">
+                            <input
+                              type="checkbox"
+                              className="form-check-input me-2"
+                              checked={pagados[i]?.includes(uniqueId) || false}
+                              onChange={() => togglePagado(i, uniqueId)}
+                            />
+                            <span className="me-2">- ${obtenerPagoTarjeta(g).toFixed(2)}</span>
+                            <span style={{ textDecoration: pagados[i]?.includes(uniqueId) ? 'line-through' : 'none', color: pagados[i]?.includes(uniqueId) ? 'green' : 'inherit' }}>
+                              {g.descripcion}
+                            </span>
+                            {g.frecuenciaTipo === 'recurrente' && <span className="badge bg-info ms-2">Recurrente</span>}
+                            {g.esMSI && g.mesesMSI && <span className="badge bg-warning text-dark ms-2">{g.mesesMSI} MSI</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -476,6 +475,6 @@ const mostrar = columnaAbierta === i;
       <div className="mt-4">
         <CatorcenaChart data={chartData} />
       </div>
-    </div>
+    </>
   );
 }
