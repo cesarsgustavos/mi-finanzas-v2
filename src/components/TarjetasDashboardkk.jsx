@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { format, parseISO, isAfter, isBefore, isEqual } from 'date-fns';
-import { db, auth } from '../services/firebase';
-import { collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, where } from 'firebase/firestore';
-import { onAuthStateChanged } from 'firebase/auth';
+import { db } from '../services/firebase';
+import { collection, addDoc, getDocs, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 
 /**
  * Componente para gestionar tarjetas de crédito en el dashboard.
@@ -26,38 +25,25 @@ function TarjetasDashboard() {
   const [frecuenciaSeleccionada, setFrecuenciaSeleccionada] = useState({});
   // Indica si se muestran o no los gastos históricos en las tarjetas
   const [mostrarHistoricos, setMostrarHistoricos] = useState(false);
-  // Controla si el checkbox de MSI está activado para cada tarjeta
+  // Controla si el checkbox de MSI está activado para cada tarjeta; esto nos
+  // permite mostrar u ocultar el campo de número de meses sin dejar espacio
   const [esMSISeleccionado, setEsMSISeleccionado] = useState({});
-  // Índice de la tarjeta actualmente expandida para ver sus detalles
+  // Índice de la tarjeta actualmente expandida para ver sus detalles.  Si es
+  // null, todas las tarjetas se muestran en modo compacto.  Esto permite
+  // comprimir la lista de tarjetas como un menú y expandirlas al hacer clic.
   const [tarjetaAbierta, setTarjetaAbierta] = useState(null);
-  // Estado para el usuario autenticado
-  const [usuario, setUsuario] = useState(null);
 
-  // Escuchar cambios de autenticación y actualizar usuario
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, user => {
-      setUsuario(user);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // Carga inicial de las tarjetas filtrando por usuario
+  // Carga inicial de las tarjetas desde Firebase
   useEffect(() => {
     const fetchTarjetas = async () => {
-      if (!usuario) {
-        setTarjetas([]);
-        return;
-      }
-      const tarjetasRef = collection(db, 'tarjetas');
-      const q = query(tarjetasRef, where('userId', '==', usuario.uid));
-      const snapshot = await getDocs(q);
+      const snapshot = await getDocs(collection(db, 'tarjetas'));
       const tarjetasData = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
       setTarjetas(tarjetasData);
     };
     fetchTarjetas();
-  }, [usuario]);
+  }, []);
 
-  // Establecer título de la pestaña al montar
+  // Al montar el componente establecemos el título de la pestaña para todo el proyecto.
   useEffect(() => {
     document.title = 'MIS FINANZAS';
   }, []);
@@ -71,18 +57,17 @@ function TarjetasDashboard() {
   };
 
   /**
-   * Maneja el envío del formulario de creación de tarjeta.
+   * Maneja el envío del formulario de creación de tarjeta. Guarda la tarjeta
+   * en Firebase y actualiza el estado local.
    */
   const handleTarjetaSubmit = async e => {
     e.preventDefault();
-    if (!usuario) return;
     const nueva = {
       ...formTarjeta,
       diaCorte: parseInt(formTarjeta.diaCorte, 10),
       diasCredito: parseInt(formTarjeta.diasCredito, 10),
       limiteCredito: parseFloat(formTarjeta.limiteCredito),
-      gastos: [],
-      userId: usuario.uid,
+      gastos: []
     };
     try {
       const docRef = await addDoc(collection(db, 'tarjetas'), nueva);
@@ -122,7 +107,9 @@ function TarjetasDashboard() {
 
   /**
    * Calcula el total de gastos dentro del ciclo de corte para una tarjeta.
-   * Incluye correcciones para compras a meses sin intereses.
+   * Se ha corregido el cálculo para tomar en cuenta las compras a meses sin
+   * intereses: en lugar de sumar el total de la compra en el mes en que
+   * ocurrió, se suma únicamente la mensualidad correspondiente (monto / meses).
    */
   const calcularTotalEnCiclo = (gastos, inicio, fin) => {
     return gastos.reduce((sum, g) => {
@@ -138,7 +125,7 @@ function TarjetasDashboard() {
         return sum;
       }
 
-      // Compras a MSI: sumar únicamente la cuota mensual cuando corresponda
+      // Compras a MSI: sumar solamente la cuota mensual cuando corresponda
       if (g.esMSI && g.mesesMSI && g.fecha) {
         let base;
         try {
@@ -162,49 +149,23 @@ function TarjetasDashboard() {
 
       // Recurrente mensual: sumar si la ocurrencia de este mes cae en rango
       if (g.frecuencia === 'mensual' && g.diaMes) {
-        const current = new Date(inicio);
-        current.setDate(g.diaMes);
-        if (estaEnRango(current.toISOString(), inicio, fin)) {
+        const mensual = new Date(inicio.getFullYear(), inicio.getMonth(), parseInt(g.diaMes, 10));
+        if (inicioSerie && mensual < inicioSerie) return sum;
+        if (mensual >= inicio && mensual <= fin) {
           return sum + g.monto;
         }
         return sum;
       }
 
-      // Recurrente semanal: sumar cada semana si cae en rango
-      if (g.frecuencia === 'semanal' && g.diaSemana) {
-        const diasMap = { domingo: 0, lunes: 1, martes: 2, miércoles: 3, jueves: 4, viernes: 5, sábado: 6 };
-        const targetDay = diasMap[g.diaSemana.toLowerCase()];
-        let current = new Date(inicio);
-        while (current.getDay() !== targetDay) {
-          current.setDate(current.getDate() + 1);
+      // Recurrente semanal, catorcenal o diario
+      if (['semanal', 'catorcenal', 'diario'].includes(g.frecuencia)) {
+        if (!g.fechaInicio) {
+          // Si no hay fecha de inicio se considera activo y se suma el monto
+          return sum + g.monto;
         }
-        while (current <= fin) {
-          if (estaEnRango(current.toISOString(), inicio, fin)) {
-            sum += g.monto;
-          }
-          current.setDate(current.getDate() + 7);
-        }
-        return sum;
-      }
-
-      // Recurrente catorcenal: sumar si corresponde
-      if (g.frecuencia === 'catorcenal') {
-        let current = new Date(inicioSerie || inicio);
-        while (current <= fin) {
-          if (estaEnRango(current.toISOString(), inicio, fin)) {
-            sum += g.monto;
-          }
-          current.setDate(current.getDate() + 14);
-        }
-        return sum;
-      }
-
-      // Recurrente diario
-      if (g.frecuencia === 'diario') {
-        for (let d = new Date(inicio); d <= fin; d.setDate(d.getDate() + 1)) {
-          if (estaEnRango(d.toISOString(), inicio, fin)) {
-            sum += g.monto;
-          }
+        // Si la fecha de inicio es anterior al fin del ciclo, se suma el monto
+        if (parseISO(g.fechaInicio) <= fin) {
+          return sum + g.monto;
         }
         return sum;
       }
@@ -216,6 +177,7 @@ function TarjetasDashboard() {
 
   /**
    * Maneja el envío del formulario de creación de gastos para una tarjeta.
+   * Guarda el gasto en la tarjeta correspondiente y actualiza Firebase.
    */
   const handleGastoSubmit = async (index, e) => {
     e.preventDefault();
@@ -290,7 +252,7 @@ function TarjetasDashboard() {
   };
 
   /**
-   * Permite editar los datos básicos de una tarjeta.
+   * Permite editar los datos básicos de una tarjeta (nombre, corte, crédito, límite).
    */
   const handleEditarTarjeta = async index => {
     const tarjeta = tarjetas[index];
@@ -505,7 +467,7 @@ function TarjetasDashboard() {
                               </small>
                             </div>
                             <button className="btn btn-sm btn-outline-danger" onClick={() => handleEliminarGasto(i, j)}>
-                              Eliminar
+                              🗑
                             </button>
                           </li>
                         ))}

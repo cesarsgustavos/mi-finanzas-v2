@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
 import MovementForm from './MovementForm';
 import { FaUtensils, FaHome, FaBus, FaHeartbeat, FaWallet, FaEdit, FaTrash } from 'react-icons/fa';
-import { getDocs, collection, addDoc, updateDoc, deleteDoc, doc, query, where } from 'firebase/firestore';
-import { db, auth } from '../services/firebase';
-import { onAuthStateChanged } from 'firebase/auth';
+import { getDocs, collection, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { db } from '../services/firebase';
 
 /**
  * Dashboard para la captura y visualización de movimientos (ingresos y gastos).
@@ -30,47 +29,28 @@ function CapturaDashboard() {
   const [filtroFechaInicio, setFiltroFechaInicio] = useState('');
   const [filtroFechaFin, setFiltroFechaFin] = useState('');
   const [filtroTipoRecurrencia, setFiltroTipoRecurrencia] = useState('todos');
-  const [usuario, setUsuario] = useState(null);
 
-  // Escuchar cambios de autenticación y actualizar el usuario
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, user => {
-      setUsuario(user);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // Cargar movimientos desde Firebase cuando haya un usuario autenticado
+  // Cargar movimientos desde Firebase al montar el componente
   useEffect(() => {
     async function cargarMovimientos() {
-      // Si no hay usuario autenticado, limpiar lista
-      if (!usuario) {
-        setMovimientos([]);
-        return;
-      }
       try {
-        const movimientosRef = collection(db, 'movimientos');
-        const q = query(movimientosRef, where('userId', '==', usuario.uid));
-        const snapshot = await getDocs(q);
-        const docs = snapshot.docs.map(docu => ({ id: docu.id, ...docu.data() }));
+        const snapshot = await getDocs(collection(db, 'movimientos'));
+        const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setMovimientos(docs);
       } catch (error) {
         console.error('Error al cargar movimientos:', error);
       }
     }
     cargarMovimientos();
-  }, [usuario]);
+  }, []);
 
   /**
    * Agrega un nuevo movimiento o actualiza uno existente.
    */
   const agregarMovimiento = async nuevo => {
-    // No guardar si no hay usuario
-    if (!usuario) return;
     const movConFecha = {
       ...nuevo,
-      ...(nuevo.frecuenciaTipo === 'recurrente' && { fechaInicio }),
-      userId: usuario.uid,
+      ...(nuevo.frecuenciaTipo === 'recurrente' && { fechaInicio })
     };
     if (modoEdicion && indiceEdicion !== null) {
       const copia = [...movimientos];
@@ -126,13 +106,13 @@ function CapturaDashboard() {
    * Construye una cadena de detalles para mostrar la recurrencia del movimiento.
    */
   const renderDetallesFrecuencia = mov => {
-    if (mov.frecuenciaTipo === 'único') return ` ${mov.fecha}`;
+    if (mov.frecuenciaTipo === 'único') return `📅 ${mov.fecha}`;
     let detalle = '';
     switch (mov.frecuencia) {
-      case 'mensual': detalle = `️ Mensual, día ${mov.diaMes}`; break;
-      case 'semanal': detalle = ` Semanal, ${mov.diaSemana}`; break;
-      case 'catorcenal': detalle = ' Catorcenal'; break;
-      case 'diario': detalle = ' Diario'; break;
+      case 'mensual': detalle = `🗓️ Mensual, día ${mov.diaMes}`; break;
+      case 'semanal': detalle = `📆 Semanal, ${mov.diaSemana}`; break;
+      case 'catorcenal': detalle = '🔁 Catorcenal'; break;
+      case 'diario': detalle = '📅 Diario'; break;
     }
     if (mov.frecuenciaTipo === 'recurrente' && mov.fechaInicio) {
       detalle += ` — Inicio: ${mov.fechaInicio}`;
@@ -219,7 +199,7 @@ function CapturaDashboard() {
         <div className="col-md-6">
           <div className="card border-danger h-100">
             <div className="card-header bg-danger text-white d-flex justify-content-between align-items-center">
-              <span> Gastos</span>
+              <span>🟥 Gastos</span>
               <span>Total: ${totalGastos.toFixed(2)}</span>
             </div>
             <div className="card-body p-0">
@@ -249,7 +229,7 @@ function CapturaDashboard() {
         <div className="col-md-6">
           <div className="card border-success h-100">
             <div className="card-header bg-success text-white d-flex justify-content-between align-items-center">
-              <span> Ingresos</span>
+              <span>🟩 Ingresos</span>
               <span>Total: ${totalIngresos.toFixed(2)}</span>
             </div>
             <div className="card-body p-0">

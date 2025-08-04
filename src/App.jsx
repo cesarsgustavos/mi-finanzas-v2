@@ -9,6 +9,7 @@ import Tarjetas from './pages/Tarjetas';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar'; // ✅ usamos Sidebar con logout
 
+
 function App() {
   const [usuario, setUsuario] = useState(null);
   const [cargando, setCargando] = useState(true);

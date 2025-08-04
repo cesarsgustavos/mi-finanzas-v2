@@ -1,12 +1,11 @@
 import { useState, useEffect } from 'react';
 import { format, addDays, isAfter, isBefore, isEqual, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { collection, getDocs, doc, setDoc, deleteDoc, query, where } from 'firebase/firestore';
-import { db, auth } from '../services/firebase';
+import { collection, getDocs, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { db } from '../services/firebase';
 import * as XLSX from 'xlsx';
 import { saveAs } from 'file-saver';
 import CatorcenaChart from './CatorcenaChart';
-import { onAuthStateChanged } from 'firebase/auth';
 
 /**
  * Utilidad para calcular el importe de un movimiento en función de su frecuencia.
@@ -257,20 +256,10 @@ export default function DashboardCatorcenal() {
   const [tarjetas, setTarjetas] = useState([]);
   const [columnaAbierta, setColumnaAbierta] = useState(null);
   const [pagados, setPagados] = useState({});
-  // Nuevo estado para el usuario autenticado
-  const [usuario, setUsuario] = useState(null);
 
   // Establecer el título de la pestaña del navegador al montar el componente
   useEffect(() => {
     document.title = 'MIS FINANZAS';
-  }, []);
-
-  // Escuchar cambios de autenticación para establecer el usuario actual
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUsuario(user);
-    });
-    return () => unsubscribe();
   }, []);
 
   // Generar catorcenas según el año seleccionado
@@ -290,33 +279,22 @@ export default function DashboardCatorcenal() {
     setCatorcenas(lista);
   };
 
-  // Cargar movimientos y tarjetas cuando cambia el año o el usuario
+  // Cargar movimientos y tarjetas cuando cambia el año
   useEffect(() => {
     generarCatorcenas();
     const cargarDatos = async () => {
-      if (usuario) {
-        const movQuery = query(collection(db, 'movimientos'), where('userId', '==', usuario.uid));
-        const movSnap = await getDocs(movQuery);
-        setMovimientos(movSnap.docs.map(docu => ({ id: docu.id, ...docu.data() })));
-        const tarQuery = query(collection(db, 'tarjetas'), where('userId', '==', usuario.uid));
-        const tarSnap = await getDocs(tarQuery);
-        setTarjetas(tarSnap.docs.map(docu => ({ id: docu.id, ...docu.data() })));
-      } else {
-        setMovimientos([]);
-        setTarjetas([]);
-      }
+      const movSnap = await getDocs(collection(db, 'movimientos'));
+      setMovimientos(movSnap.docs.map(docu => ({ id: docu.id, ...docu.data() })));
+      const tarSnap = await getDocs(collection(db, 'tarjetas'));
+      setTarjetas(tarSnap.docs.map(docu => ({ id: docu.id, ...docu.data() })));
     };
     cargarDatos();
-  }, [anioSeleccionado, usuario]);
+  }, [anioSeleccionado]);
 
-  // Cargar pagos marcados cuando cambia el usuario
+  // Cargar pagos marcados una vez
   useEffect(() => {
     const cargarPagados = async () => {
-      if (!usuario) {
-        setPagados({});
-        return;
-      }
-      const snap = await getDocs(query(collection(db, 'pagosMarcados'), where('userId', '==', usuario.uid)));
+      const snap = await getDocs(collection(db, 'pagosMarcados'));
       const data = {};
       snap.forEach(docu => {
         const { catorcenaIndex, movimientoId } = docu.data();
@@ -326,21 +304,19 @@ export default function DashboardCatorcenal() {
       setPagados(data);
     };
     cargarPagados();
-  }, [usuario]);
+  }, []);
 
   // Cambiar estado de pagado y persistir en Firestore
   const togglePagado = async (index, id) => {
-    if (!usuario) return;
     setPagados(prev => {
       const current = prev[index] || [];
       const yaMarcado = current.includes(id);
       const nuevoEstado = yaMarcado ? current.filter(item => item !== id) : [...current, id];
-      const docRef = doc(db, 'pagosMarcados', `${usuario.uid}_${index}_${id}`);
+      const docRef = doc(db, 'pagosMarcados', `${index}_${id}`);
       if (yaMarcado) {
         deleteDoc(docRef);
       } else {
         setDoc(docRef, {
-          userId: usuario.uid,
           catorcenaIndex: index,
           movimientoId: id,
           timestamp: new Date().toISOString()
@@ -364,6 +340,8 @@ export default function DashboardCatorcenal() {
     const currentIds = pagados[index] || [];
     const allSelected = chargeIds.every(id => currentIds.includes(id));
     chargeIds.forEach(uid => {
+      // Si todos están seleccionados, desmarca sólo los seleccionados actuales
+      // de lo contrario, marca sólo los que no lo están todavía
       if (allSelected && currentIds.includes(uid)) {
         togglePagado(index, uid);
       } else if (!allSelected && !currentIds.includes(uid)) {
@@ -374,12 +352,8 @@ export default function DashboardCatorcenal() {
 
   // Preparar datos para la gráfica de barras general
   const chartData = catorcenas.map(c => {
-    const ingresos = movimientos
-      .filter(m => m.tipo === 'ingreso' && enCatorcena(m, c.inicio, c.fin))
-      .reduce((sum, m) => sum + calcularImporte(m), 0);
-    const gastos = movimientos
-      .filter(m => m.tipo === 'gasto' && enCatorcena(m, c.inicio, c.fin))
-      .reduce((sum, m) => sum + calcularImporte(m), 0);
+    const ingresos = movimientos.filter(m => m.tipo === 'ingreso' && enCatorcena(m, c.inicio, c.fin)).reduce((sum, m) => sum + calcularImporte(m), 0);
+    const gastos = movimientos.filter(m => m.tipo === 'gasto' && enCatorcena(m, c.inicio, c.fin)).reduce((sum, m) => sum + calcularImporte(m), 0);
     const tarjetasTotal = tarjetas.reduce((sum, t) => sum + calcularTotalTarjeta(t, c.inicio, c.fin), 0);
     return {
       periodo: `${format(c.inicio, 'dd MMM')} - ${format(c.fin, 'dd MMM')}`,
@@ -405,7 +379,10 @@ export default function DashboardCatorcenal() {
     saveAs(new Blob([data], { type: 'application/octet-stream' }), `dashboard_${anioSeleccionado}.xlsx`);
   };
 
-  // Calcular la catorcena actual o la próxima catorcena a partir de la fecha actual
+  // Calcular la catorcena actual o la próxima catorcena a partir de la fecha actual. Este índice se
+  // utiliza para resaltar la tarjeta correspondiente en color verde. Si todas las catorcenas son
+  // anteriores al día de hoy, nextCatorcenaIndex será -1 y no se resaltará ninguna. Si hoy cae
+  // dentro de una catorcena, se tomará esa como la catorcena destacada.
   const nowDate = new Date();
   const nextCatorcenaIndex = catorcenas.findIndex(ct => ct.fin >= nowDate);
 
@@ -413,9 +390,7 @@ export default function DashboardCatorcenal() {
     <>
       {/* Controles superiores: exportar y seleccionar año */}
       <div className="d-flex justify-content-between align-items-center mb-3">
-        <button className="btn btn-outline-primary" onClick={exportarExcel}>
-          Exportar a Excel
-        </button>
+        <button className="btn btn-outline-primary" onClick={exportarExcel}>Exportar a Excel</button>
         <div>
           <label className="me-2">Selecciona año:</label>
           <select
@@ -432,38 +407,36 @@ export default function DashboardCatorcenal() {
 
       {/* Listado de catorcenas */}
       {catorcenas.map((c, i) => {
-        const ingresos = movimientos
-          .filter(m => m.tipo === 'ingreso' && enCatorcena(m, c.inicio, c.fin))
-          .sort((a, b) => new Date(a.fecha || a.fechaInicio) - new Date(b.fecha || b.fechaInicio));
-        const gastos = movimientos
-          .filter(m => m.tipo === 'gasto' && enCatorcena(m, c.inicio, c.fin))
-          .sort((a, b) => new Date(a.fecha || a.fechaInicio) - new Date(b.fecha || b.fechaInicio));
+        const ingresos = movimientos.filter(m => m.tipo === 'ingreso' && enCatorcena(m, c.inicio, c.fin)).sort((a, b) => new Date(a.fecha || a.fechaInicio) - new Date(b.fecha || b.fechaInicio));
+        const gastos = movimientos.filter(m => m.tipo === 'gasto' && enCatorcena(m, c.inicio, c.fin)).sort((a, b) => new Date(a.fecha || a.fechaInicio) - new Date(b.fecha || b.fechaInicio));
         const tarjetasTotal = tarjetas.reduce((sum, t) => sum + calcularTotalTarjeta(t, c.inicio, c.fin), 0);
         const ingresosTotal = ingresos.reduce((sum, m) => sum + calcularImporte(m), 0);
         const gastosTotal = gastos.reduce((sum, m) => sum + calcularImporte(m), 0);
         const balance = ingresosTotal - gastosTotal - tarjetasTotal;
         const mostrar = columnaAbierta === i;
-        // Calcular alturas relativas para el gráfico de barras
+        // Calculamos las alturas para las barras del gráfico comparativo
+        // Calcular alturas relativas para el gráfico de barras. Se toma el valor
+        // máximo entre ingresos, gastos y cargos de tarjetas para normalizar
+        // las alturas. Si no hay datos, las alturas serán 0.
         const maxVal = Math.max(ingresosTotal, gastosTotal, tarjetasTotal);
         const ingresosHeight = maxVal > 0 ? (ingresosTotal / maxVal) * 60 : 0;
         const gastosHeight = maxVal > 0 ? (gastosTotal / maxVal) * 60 : 0;
         const tarjetasHeight = maxVal > 0 ? (tarjetasTotal / maxVal) * 60 : 0;
         // Preparar lista de cargos de tarjeta para esta catorcena
-        const tarjetasDetalles = tarjetas
-          .map(t => {
-            const gastosTarjeta = [];
-            (t.gastos || []).forEach((g, gIdx) => {
-              const pagos = obtenerFechasPagoEnCatorcena(g, t, c.inicio, c.fin);
-              pagos.forEach((_, pagoIdx) => {
-                gastosTarjeta.push({ gasto: g, tId: t.id, gIdx, pagoIdx });
-              });
+        const tarjetasDetalles = tarjetas.map(t => {
+          const gastosTarjeta = [];
+          (t.gastos || []).forEach((g, gIdx) => {
+            const pagos = obtenerFechasPagoEnCatorcena(g, t, c.inicio, c.fin);
+            pagos.forEach((_, pagoIdx) => {
+              gastosTarjeta.push({ gasto: g, tId: t.id, gIdx, pagoIdx });
             });
-            const totalGastosTarjeta = gastosTarjeta.reduce((s, item) => s + obtenerPagoTarjeta(item.gasto), 0);
-            return { tarjeta: t, gastos: gastosTarjeta, total: totalGastosTarjeta };
-          })
-          .filter(item => item.gastos.length > 0);
-        // Determinar color de la tarjeta en función del estado
+          });
+          const totalGastosTarjeta = gastosTarjeta.reduce((s, item) => s + obtenerPagoTarjeta(item.gasto), 0);
+          return { tarjeta: t, gastos: gastosTarjeta, total: totalGastosTarjeta };
+        }).filter(item => item.gastos.length > 0);
+        // Definir colores de fondo dependiendo de si la catorcena es pasada con pendientes, la siguiente a atender o futura
         const esPasada = c.fin < nowDate;
+        // Calcular identificadores de gastos normales y cargos de tarjetas para detectar pendientes
         const gastoIds = gastos.map(m => m.id);
         const chargeIdsAll = [];
         tarjetas.forEach(t => {
@@ -477,22 +450,23 @@ export default function DashboardCatorcenal() {
         const pendientesTotales = [...gastoIds, ...chargeIdsAll].filter(id => !(pagados[i] || []).includes(id)).length;
         const cardStyle = {};
         if (esPasada && pendientesTotales > 0) {
+          // Periodo pasado con pendientes sin pagar: tono rojizo
           cardStyle.backgroundColor = '#f8d7da';
         } else if (i === nextCatorcenaIndex) {
+          // Para la catorcena actual o la siguiente: amarillo si hay pendientes, verde si todo está pagado
           if (pendientesTotales > 0) {
             cardStyle.backgroundColor = '#fff3cd';
           } else {
             cardStyle.backgroundColor = '#d1e7dd';
           }
         }
+
         return (
           <div key={i} className="card shadow-sm mb-3" style={cardStyle}>
             <div className="card-body">
               <div className="d-flex justify-content-between align-items-center flex-wrap">
                 <div className="mb-2" style={{ minWidth: '150px' }}>
-                  <h6 className="fw-bold mb-0">
-                    {format(c.inicio, 'dd MMM', { locale: es })} – {format(c.fin, 'dd MMM', { locale: es })}
-                  </h6>
+                  <h6 className="fw-bold mb-0">{format(c.inicio, 'dd MMM', { locale: es })} – {format(c.fin, 'dd MMM', { locale: es })}</h6>
                   <small className={balance >= 0 ? 'text-success' : 'text-danger'}>
                     Balance: ${balance.toFixed(2)}
                   </small>
@@ -502,15 +476,23 @@ export default function DashboardCatorcenal() {
                   <div className="text-danger me-3">- ${gastosTotal.toFixed(2)}</div>
                   <div className="text-warning me-3">${tarjetasTotal.toFixed(2)}</div>
                 </div>
-                {/* Representación gráfica: barras verticales que comparan ingresos, gastos y cargos de tarjetas. */}
+                {/* Representación gráfica: barras verticales que comparan ingresos,
+                    gastos y cargos de tarjetas. Se calcula la altura
+                    proporcional a la categoría con mayor valor absoluto. */}
                 <div className="d-flex align-items-center mb-2">
                   <div className="d-flex align-items-end" style={{ width: '60px', height: '70px' }}>
                     {/* Barra de ingresos */}
-                    <div style={{ flex: 1, margin: '0 2px', backgroundColor: '#198754', height: `${ingresosHeight}px` }}></div>
+                    <div
+                      style={{ flex: 1, margin: '0 2px', backgroundColor: '#198754', height: `${ingresosHeight}px` }}
+                    ></div>
                     {/* Barra de gastos */}
-                    <div style={{ flex: 1, margin: '0 2px', backgroundColor: '#dc3545', height: `${gastosHeight}px` }}></div>
+                    <div
+                      style={{ flex: 1, margin: '0 2px', backgroundColor: '#dc3545', height: `${gastosHeight}px` }}
+                    ></div>
                     {/* Barra de cargos de tarjetas */}
-                    <div style={{ flex: 1, margin: '0 2px', backgroundColor: '#ffc107', height: `${tarjetasHeight}px` }}></div>
+                    <div
+                      style={{ flex: 1, margin: '0 2px', backgroundColor: '#ffc107', height: `${tarjetasHeight}px` }}
+                    ></div>
                   </div>
                   <div className="ms-3 small">
                     <div><span className="badge bg-success me-1">&nbsp;</span>Ingresos</div>
@@ -552,10 +534,7 @@ export default function DashboardCatorcenal() {
                           <span className="me-2 fw-semibold text-danger">- ${calcularImporte(m).toFixed(2)}</span>
                           <span
                             className="flex-grow-1"
-                            style={{
-                              textDecoration: pagados[i]?.includes(m.id) ? 'line-through' : 'none',
-                              color: pagados[i]?.includes(m.id) ? 'green' : 'inherit'
-                            }}
+                            style={{ textDecoration: pagados[i]?.includes(m.id) ? 'line-through' : 'none', color: pagados[i]?.includes(m.id) ? 'green' : 'inherit' }}
                           >
                             {m.descripcion}
                           </span>
@@ -567,6 +546,7 @@ export default function DashboardCatorcenal() {
                     <div className="col-md-4 mb-3">
                       {/* Encabezado de tarjetas y botón para marcar todos */}
                       {(() => {
+                        // Construir lista de identificadores de cargos para comprobar si todos están seleccionados
                         const chargeIds = tarjetasDetalles.reduce((acc, tDet) => {
                           return acc.concat(tDet.gastos.map(det => `${det.tId}-${det.gIdx}-${det.pagoIdx}`));
                         }, []);
@@ -589,9 +569,7 @@ export default function DashboardCatorcenal() {
                       {tarjetasDetalles.length === 0 && <div className="text-muted">Sin cargos en tarjetas</div>}
                       {tarjetasDetalles.map(item => (
                         <div key={item.tarjeta.id} className="mb-2 p-2 border rounded">
-                          <div className="fw-semibold mb-1">
-                            {item.tarjeta.nombre} — Total: ${item.total.toFixed(2)}
-                          </div>
+                          <div className="fw-semibold mb-1">{item.tarjeta.nombre} — Total: ${item.total.toFixed(2)}</div>
                           {item.gastos.map(det => {
                             const uid = `${det.tId}-${det.gIdx}-${det.pagoIdx}`;
                             const g = det.gasto;
@@ -606,10 +584,7 @@ export default function DashboardCatorcenal() {
                                 <span className="me-2 fw-semibold text-danger">- ${obtenerPagoTarjeta(g).toFixed(2)}</span>
                                 <span
                                   className="flex-grow-1"
-                                  style={{
-                                    textDecoration: pagados[i]?.includes(uid) ? 'line-through' : 'none',
-                                    color: pagados[i]?.includes(uid) ? 'green' : 'inherit'
-                                  }}
+                                  style={{ textDecoration: pagados[i]?.includes(uid) ? 'line-through' : 'none', color: pagados[i]?.includes(uid) ? 'green' : 'inherit' }}
                                 >
                                   {g.descripcion}
                                 </span>
