@@ -6,6 +6,7 @@ import { auth } from './services/firebase';
 import Dashboard from './pages/Dashboard';
 import Captura from './pages/Captura';
 import Tarjetas from './pages/Tarjetas';
+import TarjetasDebito from './pages/TarjetasDebito'; // importar la nueva página
 import Login from './components/Login';
 import Sidebar from './components/Sidebar'; // ✅ usamos Sidebar con logout
 
@@ -52,6 +53,7 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/captura" element={<Captura />} />
           <Route path="/tarjetas" element={<Tarjetas />} />
+          <Route path="/tarjetas-debito" element={<TarjetasDebito />} /> {/* nueva ruta */}
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </main>

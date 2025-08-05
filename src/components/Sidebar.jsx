@@ -28,6 +28,11 @@ const handleLogout = async () => {
         <li className="nav-item">
           <Link to="/tarjetas" className="nav-link">💳 Tarjetas</Link>
         </li>
+        <li>
+  <Link to="/tarjetas-debito" className="nav-link">
+    🏦 Tarjetas de débito
+  </Link>
+</li>
       </ul>
 
       <hr />
