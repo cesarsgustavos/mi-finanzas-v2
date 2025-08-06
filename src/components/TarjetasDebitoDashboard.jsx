@@ -130,6 +130,46 @@ export default function TarjetasDebitoDashboard() {
     });
   };
 
+  // Plancha los rendimientos (guardarlos en Firestore como ingresos reales)
+const plancharRendimientos = async (tarjeta) => {
+  const { ingresos } = calcularRendimiento(tarjeta);
+
+  const nuevos = ingresos.filter((ingreso) => {
+    const yaExiste = tarjeta.movimientos.some(
+      (m) => m.fecha === ingreso.fecha && m.descripcion === 'Rendimiento'
+    );
+    return !yaExiste;
+  });
+
+  if (nuevos.length === 0) {
+    alert("No hay rendimientos nuevos para guardar.");
+    return;
+  }
+
+  const movimientosActualizados = [
+    ...tarjeta.movimientos,
+    ...nuevos.map((r) => ({
+      ...r,
+      esRendimiento: true,
+      frecuenciaTipo: 'único',
+      frecuencia: null,
+      fechaInicio: null,
+    })),
+  ];
+
+  await updateDoc(doc(db, 'tarjetasDebito', tarjeta.id), {
+    movimientos: movimientosActualizados,
+  });
+
+  setTarjetas((prev) =>
+    prev.map((t) =>
+      t.id === tarjeta.id ? { ...t, movimientos: movimientosActualizados } : t
+    )
+  );
+
+  alert(`${nuevos.length} rendimiento(s) guardado(s).`);
+};
+
   // Maneja campos del formulario de movimiento
   const handleMovChange = (e) => {
     const { name, value } = e.target;
@@ -293,54 +333,139 @@ export default function TarjetasDebitoDashboard() {
         : rendimiento.porcentaje / 100 / 12;
     // Generar rendimientos desde la última fecha hasta hoy
     while (current < hoy) {
-      const iso = current.toISOString().slice(0, 10);
-      const monto = capitalTopado * tasa;
-      ingresos.push({
-        tipo: 'ingreso',
-        monto,
-        descripcion: 'Rendimiento',
-        fecha: iso,
-        id: `rend-${iso}`,
-      });
-      totalRend += monto;
-      current = frecuencia === 'diario' ? addDays(current, 1) : addMonths(current, 1);
-    }
+  const iso = current.toISOString().slice(0, 10);
+
+  // ✅ Verifica si ya hay un rendimiento planchado para esta fecha
+  const yaExiste = movimientos.some(
+    (m) =>
+      m.tipo === 'ingreso' &&
+      m.descripcion === 'Rendimiento' &&
+      m.fecha === iso &&
+      m.esRendimiento === true
+  );
+
+  if (!yaExiste) {
+    const monto = capitalTopado * tasa;
+    ingresos.push({
+      tipo: 'ingreso',
+      monto,
+      descripcion: 'Rendimiento',
+      fecha: iso,
+      id: `rend-${iso}`,
+    });
+    totalRend += monto;
+  }
+
+  current = frecuencia === 'diario' ? addDays(current, 1) : addMonths(current, 1);
+}
     return { ingresos, totalRend };
   };
 
   /** Aplica filtros y calcula totales para una tarjeta */
-  const prepararDatos = (tarjeta) => {
-    const generados = tarjeta.movimientos.flatMap((m) => generarRecurrentes(m));
-    const { ingresos: rendIngresos, totalRend } = calcularRendimiento(tarjeta);
-    const todos = [
-      ...tarjeta.movimientos.filter(
-        (m) =>
-          m.frecuenciaTipo === 'único' &&
-          (!filtros.inicio || m.fecha >= filtros.inicio) &&
-          (!filtros.fin || m.fecha <= filtros.fin),
-      ),
-      ...generados,
-      ...rendIngresos,
-    ];
-    const ingresos = todos.filter((m) => m.tipo === 'ingreso');
-    const gastos = todos.filter((m) => m.tipo === 'gasto');
-    const totalIngresos = ingresos.reduce((s, m) => s + m.monto, 0);
-    const totalGastos = gastos.reduce((s, m) => s + m.monto, 0);
-    const saldo = totalIngresos - totalGastos;
-    return { todos, ingresos, gastos, totalIngresos, totalGastos, saldo, totalRend };
-  };
+ const prepararDatos = (tarjeta) => {
+  const generados = tarjeta.movimientos.flatMap((m) => generarRecurrentes(m));
+  const { ingresos: rendIngresos } = calcularRendimiento(tarjeta);
 
-  /** Construye los datos para la gráfica acumulando el saldo en orden cronológico */
-  const construirDatosGrafica = (movimientos) => {
-    const ordenados = movimientos
-      .filter((m) => m.fecha)
-      .sort((a, b) => (a.fecha < b.fecha ? -1 : 1));
-    let saldo = 0;
-    return ordenados.map((m) => {
-      saldo += m.tipo === 'gasto' ? -m.monto : m.monto;
-      return { fecha: m.fecha, saldo };
-    });
+  const todos = [
+    ...tarjeta.movimientos.filter(
+      (m) =>
+        m.frecuenciaTipo === 'único' &&
+        (!filtros.inicio || m.fecha >= filtros.inicio) &&
+        (!filtros.fin || m.fecha <= filtros.fin),
+    ),
+    ...generados,
+    ...rendIngresos,
+  ];
+
+  // === CLASIFICACIÓN ===
+  const ingresos = todos.filter(
+    (m) =>
+      m.tipo === 'ingreso' &&
+      m.descripcion !== 'Rendimiento'
+  );
+
+  const rendimientosPlanchados = todos.filter(
+    (m) =>
+      m.tipo === 'ingreso' &&
+      m.descripcion === 'Rendimiento' &&
+      m.esRendimiento
+  );
+
+  const rendimientosSimulados = todos.filter(
+    (m) =>
+      m.tipo === 'ingreso' &&
+      m.descripcion === 'Rendimiento' &&
+      !m.esRendimiento
+  );
+
+  const gastos = todos.filter((m) => m.tipo === 'gasto');
+
+  // === TOTALES ===
+  const totalIngresos = ingresos.reduce((s, m) => s + m.monto, 0);
+  const totalRend = rendimientosPlanchados.reduce((s, m) => s + m.monto, 0);
+  const totalRendSimulado = rendimientosSimulados.reduce((s, m) => s + m.monto, 0);
+  const totalGastos = gastos.reduce((s, m) => s + m.monto, 0);
+
+  const saldo = totalIngresos + totalRend - totalGastos;
+
+  return {
+    todos,
+    ingresos,
+    gastos,
+    totalIngresos,
+    totalGastos,
+    totalRend,
+    totalRendSimulado,
+    saldo,
   };
+};
+
+
+const construirDatosGrafica = (movimientos) => {
+  const agrupados = {};
+
+  // Ordenar cronológicamente
+  const ordenados = movimientos
+    .filter((m) => m.fecha)
+    .sort((a, b) => (a.fecha < b.fecha ? -1 : 1));
+
+  let saldo = 0;
+
+  ordenados.forEach((m) => {
+    const fecha = m.fecha;
+agrupados[fecha] = {
+  fecha,
+  ingresos: 0,
+  gastos: 0,
+  rendimientosPlanchados: 0,
+  rendimientosSimulados: 0,
+  saldo: 0,
+};
+
+if (m.tipo === 'ingreso') {
+  if (m.esRendimiento) {
+    agrupados[fecha].rendimientosPlanchados += m.monto;
+    saldo += m.monto; // ✅ solo los planchados suman
+  } else if (m.descripcion === 'Rendimiento') {
+    agrupados[fecha].rendimientosSimulados += m.monto;
+    // ❌ NO suma al saldo
+  } else {
+    agrupados[fecha].ingresos += m.monto;
+    saldo += m.monto; // ✅ ingresos normales sí suman
+  }
+}
+
+
+    if (m.tipo === 'gasto') {
+      agrupados[fecha].gastos += m.monto;
+      saldo -= m.monto;
+    }
+
+    agrupados[fecha].saldo = saldo;
+  });
+
+  return Object.values(agrupados);
+};
 
   /** Calcula saldo proyectado con interés compuesto */
   const calcularProyeccion = (saldoActual) => {
@@ -470,10 +595,10 @@ export default function TarjetasDebitoDashboard() {
 
       {/* Lista de tarjetas */}
       {tarjetas.map((t) => {
-        const { todos, totalIngresos, totalGastos, saldo, totalRend } =
-          prepararDatos(t);
+        const { todos, totalIngresos, totalGastos, totalRend, totalRendSimulado, saldo } = prepararDatos(t);
+
         const abierta = tarjetaAbierta === t.id;
-        const datosGrafica = construirDatosGrafica(todos);
+        const datosGrafica = construirDatosGrafica(todos)
         const saldoProyectado = calcularProyeccion(saldo);
         return (
           <div className="card mb-3" key={t.id}>
@@ -502,66 +627,74 @@ export default function TarjetasDebitoDashboard() {
               </div>
             </div>
             {abierta && (
-              <div className="card-body">
-                {/* Resumen con totales visuales */}
-                <h6>Resumen</h6>
-                <p>
-                  <span className="badge bg-success me-2">
-                    +${totalIngresos.toFixed(2)} Ingresos
-                  </span>
-                  <span className="badge bg-danger me-2">
-                    -${totalGastos.toFixed(2)} Gastos
-                  </span>
-                  <span className="badge bg-info me-2">
-                    +${totalRend.toFixed(2)} Rendimientos
-                  </span>
-                  <span
-                    className={`badge ${
-                      saldo >= 0 ? 'bg-success' : 'bg-danger'
-                    }`}
-                  >
-                    Saldo: ${saldo.toFixed(2)}
-                  </span>
-                </p>
+  <div className="card-body">
+    {/* Botón para planchar rendimientos */}
+    <div className="mb-2 text-end">
+      <button
+        className="btn btn-sm btn-outline-primary"
+        onClick={() => plancharRendimientos(t)}
+      >
+        Planchar rendimientos
+      </button>
+    </div>
 
-                {/* Gráfica de saldo acumulado */}
-                <h6>Evolución del saldo</h6>
-                <DebitoChart data={datosGrafica} />
+    {/* Resumen con totales visuales */}
+    <h6>Resumen</h6>
+ <p>
+  <span className="badge bg-success me-2">
+    +${totalIngresos.toFixed(2)} Ingresos
+  </span>
+  <span className="badge bg-danger me-2">
+    -${totalGastos.toFixed(2)} Gastos
+  </span>
+  <span className="badge bg-info me-2">
+    +${totalRend.toFixed(2)} Rendimientos plancheados
+  </span>
+  <span className="badge bg-secondary me-2">
+    +${totalRendSimulado.toFixed(2)} Simulados
+  </span>
+  <span
+    className={`badge ${saldo >= 0 ? 'bg-success' : 'bg-danger'}`}
+  >
+    Saldo: ${saldo.toFixed(2)}
+  </span>
+</p>
 
-                {/* Simulación de interés compuesto */}
-                <div className="mt-3">
-                  <h6>Simulación con interés compuesto</h6>
-                  <div className="row g-3">
-                    <div className="col-md-4">
-                      <label className="form-label">Fecha objetivo</label>
-                      <input
-                        type="date"
-                        className="form-control"
-                        value={fechaSimulacion}
-                        onChange={(e) => setFechaSimulacion(e.target.value)}
-                      />
-                    </div>
-                    <div className="col-md-4">
-                      <label className="form-label">Tasa anual (%)</label>
-                      <input
-                        type="number"
-                        className="form-control"
-                        value={tasaSimulacion}
-                        onChange={(e) =>
-                          setTasaSimulacion(Number(e.target.value))
-                        }
-                      />
-                    </div>
-                    <div className="col-md-4 d-flex align-items-end">
-                      {fechaSimulacion && (
-                        <strong>
-                          Saldo proyectado:{' '}
-                          {saldoProyectado.toFixed(2)}
-                        </strong>
-                      )}
-                    </div>
-                  </div>
-                </div>
+    {/* Gráfica (la nueva irá aquí en la siguiente sección) */}
+    <h6>Evolución del saldo</h6>
+    <DebitoChart data={datosGrafica} />
+
+    {/* Simulación de interés compuesto */}
+    <div className="mt-3">
+      <h6>Simulación con interés compuesto</h6>
+      <div className="row g-3">
+        <div className="col-md-4">
+          <label className="form-label">Fecha objetivo</label>
+          <input
+            type="date"
+            className="form-control"
+            value={fechaSimulacion}
+            onChange={(e) => setFechaSimulacion(e.target.value)}
+          />
+        </div>
+        <div className="col-md-4">
+          <label className="form-label">Tasa anual (%)</label>
+          <input
+            type="number"
+            className="form-control"
+            value={tasaSimulacion}
+            onChange={(e) => setTasaSimulacion(Number(e.target.value))}
+          />
+        </div>
+        <div className="col-md-4 d-flex align-items-end">
+          {fechaSimulacion && (
+            <strong>
+              Saldo proyectado: ${saldoProyectado.toFixed(2)}
+            </strong>
+          )}
+        </div>
+      </div>
+    </div>
 
                 {/* Lista de movimientos */}
                 <h6 className="mt-3">Movimientos</h6>
@@ -569,44 +702,57 @@ export default function TarjetasDebitoDashboard() {
                   <p>No hay movimientos.</p>
                 ) : (
                   <ul className="list-group mb-3">
-                    {todos.map((m) => (
-                      <li
-                        className="list-group-item d-flex justify-content-between align-items-start"
-                        key={m.id}
-                      >
-                        <div>
-                          <strong>
-                            {m.tipo === 'ingreso' ? '+' : '-'}$
-                            {m.monto.toFixed(2)}
-                          </strong>{' '}
-                          — {m.descripcion}{' '}
-                          {m.frecuenciaTipo === 'recurrente' && (
-                            <small className="text-muted">
-                              ({m.frecuencia}, inicio {m.fechaInicio})
-                            </small>
-                          )}
-                          {m.fecha && (
-                            <small className="text-muted"> — {m.fecha}</small>
-                          )}
-                        </div>
-                        <div>
-                          {/* Ya NO filtramos movimientos por rendimiento para permitir editar/eliminar */}
-                          <button
-                            className="btn btn-sm btn-outline-secondary me-2"
-                            onClick={() => editarMovimiento(t.id, m)}
-                          >
-                            Editar
-                          </button>
-                          <button
-                            className="btn btn-sm btn-outline-danger"
-                            onClick={() => eliminarMovimiento(t.id, m.id)}
-                          >
-                            Eliminar
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
+  {todos.map((m) => {
+    const esRendPlanchado = m.descripcion === 'Rendimiento' && m.esRendimiento;
+    const esRendSimulado = m.descripcion === 'Rendimiento' && !m.esRendimiento;
+
+    return (
+      <li
+        key={m.id}
+        className={`list-group-item d-flex justify-content-between align-items-start ${
+          esRendPlanchado
+            ? 'list-group-item-warning'
+            : esRendSimulado
+            ? 'list-group-item-light text-muted'
+            : ''
+        }`}
+      >
+        <div>
+          <strong>
+            {m.tipo === 'ingreso' ? '+' : '-'}${m.monto.toFixed(2)}
+          </strong>{' '}
+          — {m.descripcion}{' '}
+          {m.frecuenciaTipo === 'recurrente' && (
+            <small className="text-muted">
+              ({m.frecuencia}, inicio {m.fechaInicio})
+            </small>
+          )}
+          {m.fecha && <small className="text-muted"> — {m.fecha}</small>}
+          {esRendPlanchado && (
+            <span className="badge bg-warning text-dark ms-2">planchado</span>
+          )}
+          {esRendSimulado && (
+            <span className="badge bg-secondary text-light ms-2">simulado</span>
+          )}
+        </div>
+        <div>
+          <button
+            className="btn btn-sm btn-outline-secondary me-2"
+            onClick={() => editarMovimiento(t.id, m)}
+          >
+            Editar
+          </button>
+          <button
+            className="btn btn-sm btn-outline-danger"
+            onClick={() => eliminarMovimiento(t.id, m.id)}
+          >
+            Eliminar
+          </button>
+        </div>
+      </li>
+    );
+  })}
+</ul>
                 )}
 
                 {/* Formulario de movimiento */}
