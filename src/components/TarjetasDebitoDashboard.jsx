@@ -178,49 +178,62 @@ const plancharRendimientos = async (tarjeta) => {
 
   // Registra o edita un movimiento en la tarjeta abierta
   const handleMovSubmit = async (e) => {
-    e.preventDefault();
-    if (!usuario || tarjetaAbierta == null) return;
-    const idx = tarjetas.findIndex((t) => t.id === tarjetaAbierta);
-    if (idx === -1) return;
-    const tarjeta = tarjetas[idx];
-    const movimiento = {
-      tipo: formMov.tipo,
-      monto: parseFloat(formMov.monto),
-      descripcion: formMov.descripcion,
-      frecuenciaTipo: formMov.frecuenciaTipo,
-      frecuencia: formMov.frecuencia,
-      fecha: formMov.frecuenciaTipo === 'único' ? formMov.fecha : null,
-      fechaInicio: formMov.frecuenciaTipo === 'recurrente' ? formMov.fechaInicio : null,
-      id: formMov.movimientoId || Date.now().toString(),
-    };
-    let nuevosMovs;
-    if (formMov.movimientoId) {
-      // Edición
-      nuevosMovs = tarjeta.movimientos.map((m) =>
-        m.id === formMov.movimientoId ? movimiento : m,
-      );
-    } else {
-      // Alta
-      nuevosMovs = [...tarjeta.movimientos, movimiento];
-    }
-    const nuevaTarjeta = { ...tarjeta, movimientos: nuevosMovs };
-    await updateDoc(doc(db, 'tarjetasDebito', tarjeta.id), {
-      movimientos: nuevosMovs,
-    });
-    const tarjetasCopia = [...tarjetas];
-    tarjetasCopia[idx] = nuevaTarjeta;
-    setTarjetas(tarjetasCopia);
-    setFormMov({
-      tipo: 'ingreso',
-      monto: '',
-      descripcion: '',
-      frecuenciaTipo: 'único',
-      frecuencia: '',
-      fecha: '',
-      fechaInicio: '',
-      movimientoId: null,
-    });
+  e.preventDefault();
+  if (!usuario || tarjetaAbierta == null) return;
+
+  const idx = tarjetas.findIndex((t) => t.id === tarjetaAbierta);
+  if (idx === -1) return;
+  const tarjeta = tarjetas[idx];
+
+  const movimiento = {
+    tipo: formMov.tipo,
+    monto: parseFloat(formMov.monto),
+    descripcion: formMov.descripcion,
+    frecuenciaTipo: formMov.frecuenciaTipo,
+    frecuencia: formMov.frecuencia,
+    fecha: formMov.frecuenciaTipo === 'único' ? formMov.fecha : null,
+    fechaInicio: formMov.frecuenciaTipo === 'recurrente' ? formMov.fechaInicio : null,
+    id: formMov.movimientoId || Date.now().toString(),
+
+    // ✅ Este campo es clave para mantener rendimientos planchados
+    esRendimiento: !!formMov.esRendimiento,
   };
+
+  let nuevosMovs;
+
+  if (formMov.movimientoId) {
+    // Edición
+    nuevosMovs = tarjeta.movimientos.map((m) =>
+      m.id === formMov.movimientoId ? movimiento : m
+    );
+  } else {
+    // Alta
+    nuevosMovs = [...tarjeta.movimientos, movimiento];
+  }
+
+  const nuevaTarjeta = { ...tarjeta, movimientos: nuevosMovs };
+
+  await updateDoc(doc(db, 'tarjetasDebito', tarjeta.id), {
+    movimientos: nuevosMovs,
+  });
+
+  const tarjetasCopia = [...tarjetas];
+  tarjetasCopia[idx] = nuevaTarjeta;
+  setTarjetas(tarjetasCopia);
+
+  // Limpiar formulario
+  setFormMov({
+    tipo: 'ingreso',
+    monto: '',
+    descripcion: '',
+    frecuenciaTipo: 'único',
+    frecuencia: '',
+    fecha: '',
+    fechaInicio: '',
+    movimientoId: null,
+    esRendimiento: false, // ← Reinicio explícito
+  });
+};
 
   // Abre o cierra una tarjeta en el listado
   const toggleTarjeta = (id) => {
@@ -238,19 +251,22 @@ const plancharRendimientos = async (tarjeta) => {
   };
 
   // Prepara un movimiento para edición
-  const editarMovimiento = (tarjetaId, mov) => {
-    setTarjetaAbierta(tarjetaId);
-    setFormMov({
-      tipo: mov.tipo,
-      monto: mov.monto.toString(),
-      descripcion: mov.descripcion,
-      frecuenciaTipo: mov.frecuenciaTipo,
-      frecuencia: mov.frecuencia || '',
-      fecha: mov.fecha || '',
-      fechaInicio: mov.fechaInicio || '',
-      movimientoId: mov.id,
-    });
-  };
+const editarMovimiento = (tarjetaId, mov) => {
+  setTarjetaAbierta(tarjetaId);
+  setFormMov({
+    tipo: mov.tipo,
+    monto: mov.monto.toString(),
+    descripcion: mov.descripcion,
+    frecuenciaTipo: mov.frecuenciaTipo,
+    frecuencia: mov.frecuencia || '',
+    fecha: mov.fecha || '',
+    fechaInicio: mov.fechaInicio || '',
+    movimientoId: mov.id,
+
+    // ✅ Aquí está el campo que faltaba
+    esRendimiento: mov.esRendimiento || false,
+  });
+};
 
   // Elimina un movimiento (incluye también los generados por rendimiento)
   const eliminarMovimiento = async (tarjetaId, movId) => {
