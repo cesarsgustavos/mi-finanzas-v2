@@ -9,6 +9,7 @@ import Tarjetas from './pages/Tarjetas';
 import TarjetasDebito from './pages/TarjetasDebito'; // importar la nueva página
 import Login from './components/Login';
 import Sidebar from './components/Sidebar'; // ✅ usamos Sidebar con logout
+import Reportes from "./pages/Reportes";
 
 
 function App() {
@@ -54,6 +55,7 @@ function App() {
           <Route path="/captura" element={<Captura />} />
           <Route path="/tarjetas" element={<Tarjetas />} />
           <Route path="/tarjetas-debito" element={<TarjetasDebito />} /> {/* nueva ruta */}
+          <Route path="/reporte" element={<Reportes />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </main>

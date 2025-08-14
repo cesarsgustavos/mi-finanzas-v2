@@ -33,6 +33,11 @@ const handleLogout = async () => {
     🏦 Tarjetas de débito
   </Link>
 </li>
+<li>
+  <Link to="/reporte">
+    <i className="fa fa-chart-bar"></i> Reporte
+  </Link>
+</li>
       </ul>
 
       <hr />
